@@ -1,30 +1,13 @@
-/**
- * Файл: components/ui/social-button.tsx
- *
- * Переиспользуемая кнопка для входа через соцсети (Google, Apple и т.д.).
- *
- * Props:
- * - icon: React-элемент иконки (передаём снаружи)
- * - label: текст на кнопке ("Sign in with Google")
- * - onPress: обработчик нажатия
- * - style: дополнительные стили (опционально)
- *
- * Анимация:
- * При нажатии кнопка слегка сжимается (scale 0.97) — это даёт
- * тактильный feedback без вибрации.
- */
 
-import { StyleSheet, Pressable, View, Text, ViewStyle } from "react-native";
+import { Pressable, StyleSheet, Text, View, ViewStyle } from "react-native";
 import Animated, {
-  useSharedValue,
   useAnimatedStyle,
+  useSharedValue,
   withSpring,
 } from "react-native-reanimated";
 
-import { Colors, FontSizes, BorderRadius, Spacing } from "@/constants/theme";
+import { BorderRadius, Colors, FontSizes, Spacing } from "@/constants/theme";
 
-// Animated.createAnimatedComponent оборачивает обычный RN-компонент,
-// чтобы он мог принимать animated styles
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 interface SocialButtonProps {
@@ -40,7 +23,6 @@ export function SocialButton({
   onPress,
   style,
 }: SocialButtonProps) {
-  // scale для анимации нажатия
   const scale = useSharedValue(1);
 
   const animatedStyle = useAnimatedStyle(() => ({
@@ -48,7 +30,6 @@ export function SocialButton({
   }));
 
   const handlePressIn = () => {
-    // withSpring — пружинная анимация, более «живая» чем withTiming
     scale.value = withSpring(0.97, { damping: 15, stiffness: 150 });
   };
 

@@ -9,9 +9,13 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.emessanger.app",
+      "googleServicesFile": "./GoogleService-Info.plist"
     },
     "android": {
+      "googleServicesFile": "./google-services.json",
+      "package": "com.emessanger.app",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -33,12 +37,24 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#4A90FF",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#4A90FF"
           }
         }
-      ]
+      ],
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+      [
+       "expo-build-properties",
+        {
+          "ios": {
+          "useFrameworks": "static",
+          "forceStaticLinking": ["RNFBApp", "RNFBAuth", "RNFBFirestore"]
+          }
+        }
+      ],
+      // "./plugins/with-rnfirebase-podfile.js"
     ],
     "experiments": {
       "typedRoutes": true,

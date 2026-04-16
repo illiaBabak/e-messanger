@@ -1,60 +1,38 @@
-/**
- * Файл: app/auth/index.tsx
- *
- * Экран логина/регистрации. Expo Router автоматически подхватывает этот файл
- * по пути /auth (потому что он лежит в app/auth/index.tsx).
- *
- * Что здесь происходит:
- * 1. При монтировании — все элементы плавно появляются снизу вверх
- *    (каждый следующий элемент с небольшой задержкой → «каскадный» эффект)
- * 2. Кнопки Google и Apple пока вызывают Alert (заглушка)
- * 3. Внизу — ссылка "Already have an account? Sign in here"
- *
- * SafeAreaView из react-native-safe-area-context (НЕ из react-native!) —
- * корректно обрабатывает вырезы, Dynamic Island и home indicator на всех
- * устройствах. Версия из react-native давно deprecated.
- */
-
-import { useEffect } from "react";
-import {
-  StyleSheet,
-  View,
-  Text,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  withDelay,
-  Easing,
-} from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useEffect } from "react";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-import { SocialButton } from "@/components/ui/social-button";
 import { Divider } from "@/components/ui/divider";
-import { Colors, FontSizes, Spacing, BorderRadius } from "@/constants/theme";
+import { SocialButton } from "@/components/ui/social-button";
+import { BorderRadius, Colors, FontSizes, Spacing } from "@/constants/theme";
 
-export default function AuthScreen() {
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+export default function AuthWelcomeScreen() {
   const router = useRouter();
-  // ─── Анимации появления ────────────────────────────────
-  // Каждый блок (лого, кнопки, разделитель, ссылка) имеет свой
-  // opacity и translateY, чтобы они появлялись «каскадом»
+
   const logoOpacity = useSharedValue(0);
   const logoTranslateY = useSharedValue(30);
 
-  const buttonsOpacity = useSharedValue(0);
-  const buttonsTranslateY = useSharedValue(30);
+  const phoneOpacity = useSharedValue(0);
+  const phoneTranslateY = useSharedValue(30);
 
-  const dividerOpacity = useSharedValue(0);
+  const socialOpacity = useSharedValue(0);
+  const socialTranslateY = useSharedValue(30);
 
   const footerOpacity = useSharedValue(0);
-  const footerTranslateY = useSharedValue(20);
+
+  const phoneButtonScale = useSharedValue(1);
 
   useEffect(() => {
     const EASING = Easing.out(Easing.cubic);
@@ -62,125 +40,141 @@ export default function AuthScreen() {
     logoOpacity.value = withTiming(1, { duration: 600, easing: EASING });
     logoTranslateY.value = withTiming(0, { duration: 600, easing: EASING });
 
-    buttonsOpacity.value = withDelay(
+    phoneOpacity.value = withDelay(
       200,
       withTiming(1, { duration: 600, easing: EASING })
     );
-    buttonsTranslateY.value = withDelay(
+    phoneTranslateY.value = withDelay(
       200,
       withTiming(0, { duration: 600, easing: EASING })
     );
 
-    dividerOpacity.value = withDelay(
-      400,
+    socialOpacity.value = withDelay(
+      350,
       withTiming(1, { duration: 600, easing: EASING })
+    );
+    socialTranslateY.value = withDelay(
+      350,
+      withTiming(0, { duration: 600, easing: EASING })
     );
 
     footerOpacity.value = withDelay(
       500,
       withTiming(1, { duration: 600, easing: EASING })
     );
-    footerTranslateY.value = withDelay(
-      500,
-      withTiming(0, { duration: 600, easing: EASING })
-    );
   }, [
     logoOpacity,
     logoTranslateY,
-    buttonsOpacity,
-    buttonsTranslateY,
-    dividerOpacity,
+    phoneOpacity,
+    phoneTranslateY,
+    socialOpacity,
+    socialTranslateY,
     footerOpacity,
-    footerTranslateY,
   ]);
 
-  // ─── Animated styles ──────────────────────────────────────
   const logoStyle = useAnimatedStyle(() => ({
     opacity: logoOpacity.value,
     transform: [{ translateY: logoTranslateY.value }],
   }));
 
-  const buttonsStyle = useAnimatedStyle(() => ({
-    opacity: buttonsOpacity.value,
-    transform: [{ translateY: buttonsTranslateY.value }],
+  const phoneStyle = useAnimatedStyle(() => ({
+    opacity: phoneOpacity.value,
+    transform: [{ translateY: phoneTranslateY.value }],
   }));
 
-  const dividerStyle = useAnimatedStyle(() => ({
-    opacity: dividerOpacity.value,
+  const socialStyle = useAnimatedStyle(() => ({
+    opacity: socialOpacity.value,
+    transform: [{ translateY: socialTranslateY.value }],
   }));
 
   const footerStyle = useAnimatedStyle(() => ({
     opacity: footerOpacity.value,
-    transform: [{ translateY: footerTranslateY.value }],
   }));
 
-  // ─── Заглушки для кнопок ──────────────────────────────────
-  const handleGoogleSignIn = () => {
-    Alert.alert("Google Sign In", "Здесь будет логин через Google");
+  const phoneButtonAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: phoneButtonScale.value }],
+  }));
+
+
+  const handlePhone = () => {
+    router.push("/auth/phone");
   };
 
-  const handleAppleSignIn = () => {
-    Alert.alert("Apple Sign In", "Здесь будет логин через Apple");
+  const handleGoogle = () => {
+    Alert.alert("Google Sign In", "Google auth will be connected here");
   };
 
-  const handlePhoneSignIn = () => {
-    Alert.alert("Phone Sign In", "Здесь будет логин по номеру телефона");
+  const handleApple = () => {
+    Alert.alert("Apple Sign In", "Apple auth will be connected here");
   };
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-      >
-        {/* ─── Верхняя часть: логотип ─── */}
+      <View style={styles.container}>
         <Animated.View style={[styles.header, logoStyle]}>
           <View style={styles.logoRow}>
             <Text style={styles.logoText}>E-messanger</Text>
             <Text style={styles.logoDot}>.</Text>
           </View>
+          <Text style={styles.subtitle}>Connect with friends and family</Text>
         </Animated.View>
 
-        {/* ─── Центральная часть: кнопки входа ─── */}
-        <Animated.View style={[styles.content, buttonsStyle]}>
-          <SocialButton
-            icon={<Ionicons name="logo-google" size={20} color="#4285F4" />}
-            label="Sign in with Google"
-            onPress={handleGoogleSignIn}
-          />
-
-          <SocialButton
-            icon={<Ionicons name="logo-apple" size={20} color={Colors.black} />}
-            label="Sign in with Apple"
-            onPress={handleAppleSignIn}
-            style={styles.buttonSpacing}
-          />
-
-          <Animated.View style={dividerStyle}>
-            <Divider />
-          </Animated.View>
-
-          <Pressable style={styles.phoneButton} onPress={handlePhoneSignIn}>
+        <Animated.View style={phoneStyle}>
+          <AnimatedPressable
+            style={[styles.phoneButton, phoneButtonAnimStyle]}
+            onPress={handlePhone}
+            onPressIn={() => {
+              phoneButtonScale.value = withSpring(0.97, {
+                damping: 15,
+                stiffness: 150,
+              });
+            }}
+            onPressOut={() => {
+              phoneButtonScale.value = withSpring(1, {
+                damping: 15,
+                stiffness: 150,
+              });
+            }}
+          >
             <Ionicons
               name="call-outline"
               size={20}
-              color={Colors.textPrimary}
+              color={Colors.white}
               style={styles.phoneIcon}
             />
             <Text style={styles.phoneButtonText}>
               Continue with phone number
             </Text>
-          </Pressable>
+          </AnimatedPressable>
         </Animated.View>
 
-        {/* ─── Нижняя часть: ссылка на регистрацию ─── */}
-        <Animated.View style={[styles.footer, footerStyle]}>
-          <Text style={styles.footerText}>{"Don't have an account?"}</Text>
-          <Pressable onPress={() => router.push("/auth/register")}>
-            <Text style={styles.footerLink}>Sign up</Text>
-          </Pressable>
+
+        <Animated.View style={socialStyle}>
+          <Divider text="or" />
+
+          <SocialButton
+            icon={<Ionicons name="logo-google" size={20} color="#4285F4" />}
+            label="Sign in with Google"
+            onPress={handleGoogle}
+          />
+
+          <SocialButton
+            icon={<Ionicons name="logo-apple" size={20} color={Colors.black} />}
+            label="Sign in with Apple"
+            onPress={handleApple}
+            style={styles.socialSpacing}
+          />
         </Animated.View>
-      </KeyboardAvoidingView>
+
+
+        <Animated.View style={[styles.footer, footerStyle]}>
+          <Text style={styles.footerText}>
+            By continuing, you agree to our{" "}
+            <Text style={styles.footerLink}>Terms of Service</Text> and{" "}
+            <Text style={styles.footerLink}>Privacy Policy</Text>
+          </Text>
+        </Animated.View>
+      </View>
     </SafeAreaView>
   );
 }
@@ -216,21 +210,17 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: Colors.primary,
   },
-
-  content: {
-    paddingBottom: Spacing.lg,
-  },
-  buttonSpacing: {
-    marginTop: Spacing.sm + 4,
+  subtitle: {
+    fontSize: FontSizes.md,
+    color: Colors.textSecondary,
+    marginTop: Spacing.sm,
   },
 
   phoneButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    backgroundColor: Colors.primary,
     borderRadius: BorderRadius.md,
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.lg,
@@ -239,24 +229,28 @@ const styles = StyleSheet.create({
     marginRight: Spacing.sm,
   },
   phoneButtonText: {
+    color: Colors.white,
     fontSize: FontSizes.md,
-    fontWeight: "500",
-    color: Colors.textPrimary,
+    fontWeight: "600",
+  },
+
+  socialSpacing: {
+    marginTop: Spacing.sm + 4,
   },
 
   footer: {
     alignItems: "center",
-    paddingBottom: Spacing.xl,
-    paddingTop: Spacing.lg,
+    paddingVertical: Spacing.xl,
+    paddingHorizontal: Spacing.md,
   },
   footerText: {
-    fontSize: FontSizes.sm,
-    color: Colors.textSecondary,
+    fontSize: FontSizes.xs,
+    color: Colors.textMuted,
+    textAlign: "center",
+    lineHeight: 18,
   },
   footerLink: {
-    fontSize: FontSizes.sm,
     color: Colors.primary,
-    fontWeight: "600",
-    marginTop: Spacing.xs,
+    fontWeight: "500",
   },
 });

@@ -1,35 +1,21 @@
-/**
- * Файл: components/ui/text-input.tsx
- *
- * Кастомный TextInput для форм авторизации и регистрации.
- *
- * Props:
- * - leftIcon: имя иконки Ionicons (отображается слева)
- * - rightIcon / onRightIconPress: иконка-кнопка справа
- * - error: текст ошибки валидации (показывается под полем красным)
- * - Все стандартные TextInputProps тоже работают (placeholder, value, и т.д.)
- *
- * При наличии error рамка становится красной вместо primary.
- */
-
+import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import {
-  StyleSheet,
-  View,
-  Text,
+  Pressable,
   TextInput as RNTextInput,
   TextInputProps as RNTextInputProps,
-  Pressable,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
   interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
 } from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
 
-import { Colors, FontSizes, BorderRadius, Spacing } from '@/constants/theme';
+import { BorderRadius, Colors, FontSizes, Spacing } from '@/constants/theme';
 
 interface TextInputProps extends RNTextInputProps {
   leftIcon?: keyof typeof Ionicons.glyphMap;

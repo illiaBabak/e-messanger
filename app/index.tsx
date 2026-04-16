@@ -1,29 +1,39 @@
+import { useRouter } from "expo-router";
 import { useCallback, useEffect } from "react";
 import { StyleSheet, View } from "react-native";
-import { useRouter } from "expo-router";
 import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  withDelay,
   Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withTiming,
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 
 import { Colors, FontSizes } from "@/constants/theme";
+import { useAuth } from "@/providers/AuthProvider";
 
 export default function SplashScreen() {
   const router = useRouter();
 
-  // ─── Shared values для анимаций ──────────────────────────
+  const { user, isProfileComplete, isLoading } = useAuth();
+
   const titleOpacity = useSharedValue(0);
   const titleScale = useSharedValue(0.8);
   const dotOpacity = useSharedValue(0);
   const screenOpacity = useSharedValue(1);
 
-  const navigateToAuth = useCallback(() => {
-    router.replace("/auth" as never);
-  }, [router]);
+  const navigateNext = useCallback(() => {
+    if (isLoading) return;
+
+    if (!user) {
+      router.replace("/auth");
+    } else if (!isProfileComplete) {
+      router.replace("/auth/create-profile");
+    } else {
+      router.replace("/main");
+    }
+  }, [router, user, isProfileComplete, isLoading]);
 
   useEffect(() => {
     titleOpacity.value = withTiming(1, {
@@ -42,13 +52,12 @@ export default function SplashScreen() {
       1200,
       withTiming(0, { duration: 400 }, (finished) => {
         if (finished) {
-          scheduleOnRN(navigateToAuth);
+          scheduleOnRN(navigateNext);
         }
       })
     );
-  }, [titleOpacity, titleScale, dotOpacity, screenOpacity, navigateToAuth]);
+  }, [titleOpacity, titleScale, dotOpacity, screenOpacity, navigateNext]);
 
-  // ─── Animated styles ──────────────────────────────────────
   const screenStyle = useAnimatedStyle(() => ({
     opacity: screenOpacity.value,
   }));

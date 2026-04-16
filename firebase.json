@@ -1,0 +1,12 @@
+{
+  "react-native": {
+    "crashlytics_auto_collection_enabled": false,
+    "analytics_auto_collection_enabled": false
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "singleProjectMode": true
+  }
+}
