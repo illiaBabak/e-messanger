@@ -1,4 +1,4 @@
-import { onAuthStateChanged } from "@/services/auth";
+import { getCurrentUser, onAuthStateChanged } from "@/services/auth";
 import { FirebaseAuthTypes } from "@react-native-firebase/auth";
 import { createContext, useContext, useEffect, useState } from "react";
 
@@ -25,9 +25,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => unsubscribe();
   }, []);
 
-  const refreshContext = () => setTick(t => t + 1);
+  const refreshContext = () => {
+    setUser(getCurrentUser());
+    setTick(t => t + 1);
+  };
 
-  // Re-evaluates whenever `user` changes OR `tick` is updated (forcing re-render)
   const isProfileComplete = !!(user && user.displayName);
 
   return (

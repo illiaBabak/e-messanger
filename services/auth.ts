@@ -6,6 +6,8 @@ import {
   updateProfile,
 } from "@react-native-firebase/auth";
 
+import { saveUserProfileData } from "./firestore";
+
 import { auth } from "./firebase";
 
 export class AuthError extends Error {
@@ -49,15 +51,25 @@ export async function verifyOtp(otp: string): Promise<FirebaseAuthTypes.User> {
   }
 }
 
-
-export async function updateUserProfile(displayName: string): Promise<void> {
+export async function updateUserProfile(
+  login: string,
+  name: string,
+  photoURL: string | null 
+): Promise<void> {
   const user = auth.currentUser;
 
   if (!user) throw new AuthError("No authenticated user", "unauthenticated");
 
   try {
-    await updateProfile(user, { displayName });
+    const defaultPhotoURL = photoURL || undefined;
+
+    await updateProfile(user, { displayName: name, photoURL: defaultPhotoURL });
+
+    await saveUserProfileData(user.uid, login, name, photoURL);
   } catch (error) {
+    if (error instanceof Error && error.name === "FirestoreError") {
+      throw error
+    }
     throw handleAuthError(error, "[Auth] updateProfile error");
   }
 }
