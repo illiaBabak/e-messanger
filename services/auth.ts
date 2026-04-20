@@ -2,9 +2,13 @@ import {
   FirebaseAuthTypes,
   onAuthStateChanged as firebaseOnAuthStateChanged,
   signOut as firebaseSignOut,
+  GoogleAuthProvider,
+  signInWithCredential,
   signInWithPhoneNumber,
-  updateProfile,
+  updateProfile
 } from "@react-native-firebase/auth";
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import Constants from "expo-constants";
 
 import { saveUserProfileData } from "./firestore";
 
@@ -20,8 +24,35 @@ export class AuthError extends Error {
   }
 }
 
-let _confirmationResult: FirebaseAuthTypes.ConfirmationResult | null = null;
+const webClientId = Constants.expoConfig?.extra?.webClientId;
+const iosClientId = Constants.expoConfig?.extra?.iosClientId;
 
+GoogleSignin.configure({
+  webClientId: webClientId,
+  iosClientId: iosClientId,
+});
+
+export async function signInWithGoogle(): Promise<FirebaseAuthTypes.UserCredential> {
+  try {
+    await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+
+    const { data } = await GoogleSignin.signIn();
+    
+    const idToken = data?.idToken;
+
+    if (!idToken) {
+      throw new AuthError("No ID token found", "google-auth-failed");
+    }
+
+    const googleCredential = GoogleAuthProvider.credential(idToken);
+    
+    return signInWithCredential(auth, googleCredential)
+  } catch (error) {
+    throw handleAuthError(error, "[Auth] signInWithGoogle error");
+  }
+}
+
+let _confirmationResult: FirebaseAuthTypes.ConfirmationResult | null = null;
 
 export async function sendOtp(phoneNumber: string): Promise<boolean> {
   try {
@@ -99,6 +130,7 @@ function handleAuthError(error: unknown, logPrefix: string): AuthError {
   console.error(`${logPrefix}:`, err.code, err.message);
   
   const code = err.code ?? "unknown";
+  
   return new AuthError(getReadableErrorMessage(code), code);
 }
 

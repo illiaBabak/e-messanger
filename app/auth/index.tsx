@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Divider } from "@/components/ui/divider";
 import { SocialButton } from "@/components/ui/social-button";
 import { BorderRadius, Colors, FontSizes, Spacing } from "@/constants/theme";
+import { signInWithGoogle } from "@/services/auth";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -100,12 +101,14 @@ export default function AuthWelcomeScreen() {
     router.push("/auth/phone");
   };
 
-  const handleGoogle = () => {
-    Alert.alert("Google Sign In", "Google auth will be connected here");
-  };
+  const handleGoogle = async () => {
+    try {
+      await signInWithGoogle();
 
-  const handleApple = () => {
-    Alert.alert("Apple Sign In", "Apple auth will be connected here");
+      router.replace("/main");
+    } catch (error) {
+      Alert.alert("Something went wrong during sign in with Google");
+    }
   };
 
   return (
@@ -113,7 +116,7 @@ export default function AuthWelcomeScreen() {
       <View style={styles.container}>
         <Animated.View style={[styles.header, logoStyle]}>
           <View style={styles.logoRow}>
-            <Text style={styles.logoText}>E-messanger</Text>
+            <Text style={styles.logoText}>E-messenger</Text>
             <Text style={styles.logoDot}>.</Text>
           </View>
           <Text style={styles.subtitle}>Connect with friends and family</Text>
@@ -156,13 +159,6 @@ export default function AuthWelcomeScreen() {
             icon={<Ionicons name="logo-google" size={20} color="#4285F4" />}
             label="Sign in with Google"
             onPress={handleGoogle}
-          />
-
-          <SocialButton
-            icon={<Ionicons name="logo-apple" size={20} color={Colors.black} />}
-            label="Sign in with Apple"
-            onPress={handleApple}
-            style={styles.socialSpacing}
           />
         </Animated.View>
 

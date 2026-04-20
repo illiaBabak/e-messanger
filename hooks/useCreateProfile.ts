@@ -70,7 +70,7 @@ export function useCreateProfile() {
 
       await updateUserProfile(cleanLogin, trimmedName, photoURL);
 
-      refreshContext();
+      await refreshContext();
 
       router.replace("/main");
     } catch (err) {

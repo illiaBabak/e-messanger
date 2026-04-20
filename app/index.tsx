@@ -75,7 +75,7 @@ export default function SplashScreen() {
     <Animated.View style={[styles.container, screenStyle]}>
       <View style={styles.logoContainer}>
         <Animated.Text style={[styles.title, titleStyle]}>
-          E-messanger
+          E-messenger
         </Animated.Text>
         <Animated.Text style={[styles.dot, dotStyle]}>.</Animated.Text>
       </View>

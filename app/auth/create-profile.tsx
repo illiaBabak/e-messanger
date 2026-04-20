@@ -113,7 +113,7 @@ export default function CreateProfileScreen() {
 
             <Text style={styles.title}>{"Create Profile"}</Text>
             <Text style={styles.subtitle}>
-              This is how others will see you in E-messanger
+              This is how others will see you in E-messenger
             </Text>
           </View>
 

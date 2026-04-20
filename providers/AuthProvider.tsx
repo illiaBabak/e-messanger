@@ -1,12 +1,13 @@
 import { getCurrentUser, onAuthStateChanged } from "@/services/auth";
 import { FirebaseAuthTypes } from "@react-native-firebase/auth";
+import firestore from "@react-native-firebase/firestore";
 import { createContext, useContext, useEffect, useState } from "react";
 
 interface AuthContextType {
   user: FirebaseAuthTypes.User | null;
   isLoading: boolean;
   isProfileComplete: boolean;
-  refreshContext: () => void;
+  refreshContext: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -14,23 +15,47 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<FirebaseAuthTypes.User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [tick, setTick] = useState(0);
+  const [isProfileComplete, setIsProfileComplete] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged((currentUser) => {
+    const unsubscribe = onAuthStateChanged(async (currentUser) => {
+      setIsLoading(true);
       setUser(currentUser);
+
+      if (currentUser) {
+        try {
+          const userDoc = await firestore().collection("users").doc(currentUser.uid).get();
+
+          setIsProfileComplete(userDoc.exists());
+        } catch (error) {
+          console.error("Failed to fetch user profile completion status", error);
+          setIsProfileComplete(false);
+        }
+      } else {
+        setIsProfileComplete(false);
+      }
+
       setIsLoading(false);
     });
 
     return () => unsubscribe();
   }, []);
 
-  const refreshContext = () => {
-    setUser(getCurrentUser());
-    setTick(t => t + 1);
-  };
+  const refreshContext = async () => {
+    const updatedUser = getCurrentUser();
 
-  const isProfileComplete = !!(user && user.displayName);
+    setUser(updatedUser);
+
+    if (updatedUser) {
+      try {
+        const userDoc = await firestore().collection("users").doc(updatedUser.uid).get();
+
+        setIsProfileComplete(userDoc.exists());
+      } catch (error) {
+        setIsProfileComplete(false);
+      }
+    }
+  };
 
   return (
     <AuthContext.Provider
