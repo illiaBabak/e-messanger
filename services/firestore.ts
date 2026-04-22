@@ -1,4 +1,4 @@
-import firestore from '@react-native-firebase/firestore';
+import firestore, { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
 
 export class FirestoreError extends Error {
   code: string;
@@ -54,5 +54,38 @@ export async function saveUserProfileData(
     console.error('[Firestore] saveUserProfileData error', error);
     if (error instanceof FirestoreError) throw error;
     throw new FirestoreError('Failed to save profile', 'firestore/transaction-failed');
+  }
+}
+
+export async function updateUserPresence(uid: string, status: 'online' | 'offline'): Promise<void> {
+  try {
+    await firestore().collection('users').doc(uid).update({
+      status,
+      lastSeenMs: firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.error('[Firestore] updateUserPresence error', error);
+  }
+}
+
+export async function addContactToFirestore(uid: string, contactId: string, alias?: string): Promise<void> {
+  try {
+    const data: { addedAt: FirebaseFirestoreTypes.FieldValue; alias?: string } = {
+      addedAt: firestore.FieldValue.serverTimestamp(),
+    };
+    
+    if (alias) {
+      data.alias = alias;
+    }
+
+    await firestore()
+      .collection('users')
+      .doc(uid)
+      .collection('contacts')
+      .doc(contactId)
+      .set(data, { merge: true });
+  } catch (error) {
+    console.error('[Firestore] addContactToFirestore error', error);
+    throw new FirestoreError('Failed to add contact', 'firestore/write-failed');
   }
 }

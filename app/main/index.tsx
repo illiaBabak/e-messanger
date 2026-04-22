@@ -1,22 +1,15 @@
-import { BorderRadius, Colors, FontSizes, Spacing } from "@/constants/theme";
-import { useAuth } from "@/providers/AuthProvider";
-import { signOut } from "@/services/auth";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Colors, FontSizes, Spacing } from "@/constants/theme";
+import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-export default function HomeScreen() {
-  const { user } = useAuth();
-
+export default function ChatsScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <Text style={styles.welcomeText}>
-          Welcome, {user?.displayName ?? "User"}!
-        </Text>
-        
-        <Pressable style={styles.signOutButton} onPress={() => signOut()}>
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </Pressable>
+        <Text style={styles.title}>Chats</Text>
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyText}>No active chats.</Text>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -29,25 +22,22 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
     paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
   },
-  welcomeText: {
+  title: {
     fontSize: FontSizes.xl,
     fontWeight: "bold",
     color: Colors.textPrimary,
-    marginBottom: Spacing.xl,
+    marginBottom: Spacing.lg,
   },
-  signOutButton: {
-    backgroundColor: Colors.error,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.xl,
-    borderRadius: BorderRadius.md,
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  signOutText: {
-    color: Colors.white,
-    fontWeight: "bold",
+  emptyText: {
     fontSize: FontSizes.md,
+    color: Colors.textSecondary,
   },
 });

@@ -2,18 +2,32 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
 
-    // This rule allows anyone with your Firestore database reference to view, edit,
-    // and delete all data in your Firestore database. It is useful for getting
-    // started, but it is configured to expire after 30 days because it
-    // leaves your app open to attackers. At that time, all client
-    // requests to your Firestore database will be denied.
-    //
-    // Make sure to write security rules for your app before that time, or else
-    // all client requests to your Firestore database will be denied until you Update
-    // your rules
-    match /{document=**} {
-      allow read, write: if request.time < timestamp.date(2026, 5, 18);
+    match /usernames/{username} {
+      allow read: if isAuthenticated();
+      // Allow creation/modification only if the document contains their own userId
+      allow write: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+    }
+
+    match /users/{userId} {
+      // Anyone logged in can read a user profile (needed for messaging/contacts)
+      allow read: if isAuthenticated();
+      // Only the owner can edit their profile or update presence status
+      allow write: if isOwner(userId);
+
+      // Subcollection for contacts
+      match /contacts/{contactId} {
+        // Only the owner can read/write their own contacts
+        allow read, write: if isOwner(userId);
+      }
     }
   }
 }
