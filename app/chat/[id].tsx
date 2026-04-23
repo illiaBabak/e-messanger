@@ -1,24 +1,28 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
+  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { BorderRadius, Colors, FontSizes, Spacing } from "@/constants/theme";
-import { useAuth } from "@/providers/AuthProvider";
+import { Colors, FontSizes, Spacing } from "@/constants/theme";
 import { useContacts } from "@/hooks/useContacts";
+import { useAuth } from "@/providers/AuthProvider";
 
 export default function ChatScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
@@ -37,103 +41,165 @@ export default function ChatScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <View style={styles.header}>
-        <Pressable style={styles.headerLeft} onPress={handleBack}>
-          <Ionicons name="chevron-back" size={28} color={Colors.primary} />
-        </Pressable>
-
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerName}>{name}</Text>
-          <Text
-            style={[
-              styles.headerStatus,
-              status === "online" && styles.headerStatusOnline,
-            ]}
-          >
-            {status === "online" ? "Online" : "Offline"}
-          </Text>
-        </View>
-
-        <Pressable style={styles.headerRight}>
-          {decodedPhotoURL ? (
-            <Image
-              source={decodedPhotoURL}
-              style={styles.avatarImage}
-              contentFit="cover"
-              transition={300}
-            />
-          ) : (
-            <View style={styles.avatarPlaceholder}>
-              <Text style={styles.avatarInitial}>{name?.charAt(0) || "?"}</Text>
-            </View>
-          )}
-        </Pressable>
-      </View>
-
-      <KeyboardAvoidingView
+    <LinearGradient
+      colors={["#7CB9E8", "#B594E6", "#F294C8"]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 0, y: 1 }}
+      style={styles.backgroundImage}
+    >
+      <ImageBackground
+        source={require("@/assets/images/chat-bg.png")}
+        style={styles.backgroundImage}
+        imageStyle={styles.backgroundImageStyle}
+      >
+        <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View style={styles.messagesContainer}>
+        <ScrollView
+          style={styles.messagesContainer}
+          contentContainerStyle={{
+            paddingTop: insets.top + 60, // Space for the header
+            paddingBottom: Spacing.xl,
+          }}
+          showsVerticalScrollIndicator={false}
+        >
           {/* Messages list will be added here in the future */}
+        </ScrollView>
+
+        <View style={[styles.headerContainer, { paddingTop: insets.top + Spacing.sm }]}>
+          <Pressable style={styles.floatingCircle} onPress={handleBack}>
+            <Ionicons name="chevron-back" size={24} color={Colors.primary} style={{ marginLeft: -2 }} />
+          </Pressable>
+
+          <View style={styles.floatingPill}>
+            <Text style={styles.headerName}>{name}</Text>
+            <Text
+              style={[
+                styles.headerStatus,
+                status === "online" && styles.headerStatusOnline,
+              ]}
+            >
+              {status === "online" ? "Online" : "Last seen recently"}
+            </Text>
+          </View>
+
+          <Pressable style={styles.floatingAvatar}>
+            {decodedPhotoURL ? (
+              <Image
+                source={decodedPhotoURL}
+                style={styles.avatarImage}
+                contentFit="cover"
+                transition={300}
+              />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Text style={styles.avatarInitial}>
+                  {name?.charAt(0) || "?"}
+                </Text>
+              </View>
+            )}
+          </Pressable>
         </View>
 
-        <SafeAreaView edges={["bottom"]} style={styles.footerSafeArea}>
-          <View style={styles.inputContainer}>
-            <Pressable style={styles.iconButton}>
-              <Ionicons name="attach" size={26} color={Colors.textSecondary} />
-            </Pressable>
+        <View
+          style={[
+            styles.footerContainer,
+            { paddingBottom: Math.max(insets.bottom, Spacing.sm) },
+          ]}
+        >
+          <Pressable style={styles.floatingCircle}>
+            <Ionicons name="attach" size={24} color={Colors.textSecondary} />
+          </Pressable>
 
+          <View style={styles.floatingInputWrapper}>
             <TextInput
               style={styles.textInput}
-              placeholder="Message..."
+              placeholder="Message"
               placeholderTextColor={Colors.textMuted}
               value={message}
               onChangeText={setMessage}
               multiline
             />
-
-            <Pressable style={styles.iconButton}>
+            <Pressable style={styles.stickerButton}>
               <Ionicons
-                name={message.trim() ? "send" : "mic"}
+                name="happy-outline"
                 size={24}
-                color={message.trim() ? Colors.primary : Colors.textSecondary}
+                color={Colors.textSecondary}
               />
             </Pressable>
           </View>
-        </SafeAreaView>
+
+          <Pressable style={styles.floatingCirclePrimary}>
+            {message.trim() ? (
+              <Ionicons name="arrow-up" size={24} color={Colors.white} />
+            ) : (
+              <Ionicons
+                name="mic-outline"
+                size={24}
+                color={Colors.white}
+              />
+            )}
+          </Pressable>
+        </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+      </ImageBackground>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  backgroundImage: {
     flex: 1,
-    backgroundColor: Colors.white,
+  },
+  backgroundImageStyle: {
+    opacity: 0.2, // Blend the pattern with the vibrant gradient
   },
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
   },
-  header: {
+  messagesContainer: {
+    flex: 1,
+  },
+  headerContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.sm,
-    backgroundColor: Colors.white,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    paddingBottom: Spacing.sm,
+    zIndex: 10,
   },
-  headerLeft: {
-    padding: Spacing.xs,
-    minWidth: 40,
-  },
-  headerCenter: {
-    flex: 1,
+  floatingCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.9)",
+    justifyContent: "center",
     alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  floatingPill: {
+    flex: 1,
+    marginHorizontal: Spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.9)",
+    borderRadius: 22,
+    paddingVertical: 6,
+    paddingHorizontal: Spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   headerName: {
     fontSize: FontSizes.md,
@@ -148,19 +214,28 @@ const styles = StyleSheet.create({
   headerStatusOnline: {
     color: Colors.primary,
   },
-  headerRight: {
-    padding: Spacing.xs,
-    minWidth: 40,
-    alignItems: "flex-end",
+  floatingAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    padding: 2,
   },
   avatarImage: {
-    width: 40,
-    height: 40,
+    width: "100%",
+    height: "100%",
     borderRadius: 20,
   },
   avatarPlaceholder: {
-    width: 40,
-    height: 40,
+    width: "100%",
+    height: "100%",
     borderRadius: 20,
     backgroundColor: "#EBF2FF",
     alignItems: "center",
@@ -171,35 +246,52 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: Colors.primary,
   },
-  messagesContainer: {
-    flex: 1,
-  },
-  footerSafeArea: {
-    backgroundColor: Colors.white,
-  },
-  inputContainer: {
+  footerContainer: {
     flexDirection: "row",
     alignItems: "flex-end",
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    backgroundColor: Colors.white,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
+    paddingHorizontal: Spacing.sm,
+    paddingTop: Spacing.sm,
+  },
+  floatingInputWrapper: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    backgroundColor: "rgba(255,255,255,0.9)",
+    borderRadius: 22,
+    marginHorizontal: Spacing.xs,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    overflow: "hidden",
   },
   textInput: {
     flex: 1,
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.xl,
     paddingHorizontal: Spacing.md,
-    paddingTop: 10,
-    paddingBottom: 10,
+    paddingTop: Platform.OS === "ios" ? 12 : 10,
+    paddingBottom: Platform.OS === "ios" ? 12 : 10,
     fontSize: FontSizes.md,
     color: Colors.textPrimary,
-    maxHeight: 100,
-    marginHorizontal: Spacing.sm,
+    maxHeight: 120,
+    minHeight: 44,
   },
-  iconButton: {
-    padding: Spacing.xs,
-    marginBottom: 4,
+  stickerButton: {
+    padding: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  floatingCirclePrimary: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
   },
 });
