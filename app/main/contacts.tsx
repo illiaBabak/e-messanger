@@ -3,6 +3,7 @@ import { BorderRadius, Colors, FontSizes, Spacing } from "@/constants/theme";
 import { useAuth } from "@/providers/AuthProvider";
 import { Ionicons } from "@expo/vector-icons";
 import firestore from "@react-native-firebase/firestore";
+import { router } from "expo-router";
 import { Image } from "expo-image";
 import { useMemo, useState } from "react";
 import {
@@ -150,7 +151,15 @@ export default function ContactsScreen() {
   };
 
   const renderContact = ({ item }: { item: ContactProfile }) => (
-    <Pressable style={styles.contactItem}>
+    <Pressable 
+      style={styles.contactItem}
+      onPress={() => {
+        router.push({
+          pathname: "/chat/[id]",
+          params: { id: item.id },
+        });
+      }}
+    >
       <View style={styles.avatarPlaceholder}>
         {item.photoURL ? (
           <Image

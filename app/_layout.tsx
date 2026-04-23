@@ -27,6 +27,14 @@ export default function RootLayout() {
             name="main" 
             options={{ gestureEnabled: false }} 
           />
+          
+          <Stack.Screen 
+            name="chat" 
+            options={{ 
+              headerShown: false,
+              animation: 'default'
+            }} 
+          />
         </Stack>
       </SafeAreaProvider>
     </AuthProvider>
