@@ -29,5 +29,15 @@ service cloud.firestore {
         allow read, write: if isOwner(userId);
       }
     }
+
+    match /chats/{chatId} {
+      // Allow read if the user is in participants array (for queries) or part of the chatId
+      allow read: if isAuthenticated() && (request.auth.uid in resource.data.participants || chatId.matches('.*' + request.auth.uid + '.*'));
+      allow write: if isAuthenticated() && chatId.matches('.*' + request.auth.uid + '.*');
+      
+      match /messages/{messageId} {
+        allow read, write: if isAuthenticated() && chatId.matches('.*' + request.auth.uid + '.*');
+      }
+    }
   }
 }

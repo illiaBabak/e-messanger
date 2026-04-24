@@ -2,13 +2,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
+  FlatList,
   ImageBackground,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Colors, FontSizes, Spacing } from "@/constants/theme";
 import { useContacts } from "@/hooks/useContacts";
+import { Message, useMessages } from "@/hooks/useMessages";
 import { useAuth } from "@/providers/AuthProvider";
 
 export default function ChatScreen() {
@@ -27,6 +28,7 @@ export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { contacts } = useContacts(user?.uid);
+  const { messages, sendMessage } = useMessages(user?.uid, id);
 
   const contact = useMemo(() => contacts.find((c) => c.id === id), [contacts, id]);
 
@@ -34,10 +36,55 @@ export default function ChatScreen() {
   const status = contact?.status || "offline";
   const decodedPhotoURL = contact?.photoURL;
 
-  const [message, setMessage] = useState("");
+  const [messageText, setMessageText] = useState("");
+  const flatListRef = useRef<FlatList>(null);
 
   const handleBack = () => {
     router.back();
+  };
+
+  const handleSend = async () => {
+    const textToSend = messageText.trim();
+    if (textToSend) {
+      setMessageText("");
+      try {
+        await sendMessage(textToSend);
+      } catch (error) {
+        console.error("Failed to send message:", error);
+        setMessageText(textToSend);
+      }
+    }
+  };
+
+  const formatTime = (ms: number) => {
+    const date = new Date(ms);
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+
+  const renderMessage = ({ item }: { item: Message }) => {
+    const isMe = item.senderId === user?.uid;
+    return (
+      <View style={[styles.messageRow, isMe ? styles.messageRowMe : styles.messageRowFriend]}>
+        <View style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleFriend]}>
+          <Text style={[styles.messageText, isMe ? styles.messageTextMe : styles.messageTextFriend]}>
+            {item.text}
+          </Text>
+          <View style={styles.messageFooter}>
+            <Text style={[styles.messageTime, isMe ? styles.messageTimeMe : styles.messageTimeFriend]}>
+              {formatTime(item.createdAt)}
+            </Text>
+            {isMe && (
+              <Ionicons
+                name={item.isRead ? "checkmark-done" : "checkmark"}
+                size={14}
+                color={item.isRead ? "#4CAF50" : "#8E8E93"}
+                style={styles.messageCheckmarks}
+              />
+            )}
+          </View>
+        </View>
+      </View>
+    );
   };
 
   return (
@@ -56,16 +103,21 @@ export default function ChatScreen() {
         style={styles.container}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <ScrollView
+        <FlatList
+          ref={flatListRef}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
           style={styles.messagesContainer}
           contentContainerStyle={{
-            paddingTop: insets.top + 60, // Space for the header
+            paddingTop: insets.top + 80, // Space for the header
             paddingBottom: Spacing.xl,
+            paddingHorizontal: Spacing.md,
           }}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          renderItem={renderMessage}
           showsVerticalScrollIndicator={false}
-        >
-          {/* Messages list will be added here in the future */}
-        </ScrollView>
+        />
 
         <View style={[styles.headerContainer, { paddingTop: insets.top + Spacing.sm }]}>
           <Pressable style={styles.floatingCircle} onPress={handleBack}>
@@ -117,8 +169,8 @@ export default function ChatScreen() {
               style={styles.textInput}
               placeholder="Message"
               placeholderTextColor={Colors.textMuted}
-              value={message}
-              onChangeText={setMessage}
+              value={messageText}
+              onChangeText={setMessageText}
               multiline
             />
             <Pressable style={styles.stickerButton}>
@@ -130,8 +182,8 @@ export default function ChatScreen() {
             </Pressable>
           </View>
 
-          <Pressable style={styles.floatingCirclePrimary}>
-            {message.trim() ? (
+          <Pressable style={styles.floatingCirclePrimary} onPress={handleSend}>
+            {messageText.trim() ? (
               <Ionicons name="arrow-up" size={24} color={Colors.white} />
             ) : (
               <Ionicons
@@ -160,6 +212,65 @@ const styles = StyleSheet.create({
   },
   messagesContainer: {
     flex: 1,
+  },
+  messageRow: {
+    flexDirection: "row",
+    marginBottom: Spacing.sm,
+    width: "100%",
+  },
+  messageRowMe: {
+    justifyContent: "flex-end",
+  },
+  messageRowFriend: {
+    justifyContent: "flex-start",
+  },
+  messageBubble: {
+    maxWidth: "80%",
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    borderRadius: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  messageBubbleMe: {
+    backgroundColor: "#E1D5FA", // Light purple hex code as requested
+    borderBottomRightRadius: 4,
+  },
+  messageBubbleFriend: {
+    backgroundColor: Colors.white,
+    borderBottomLeftRadius: 4,
+  },
+  messageText: {
+    fontSize: FontSizes.md,
+    lineHeight: 20,
+  },
+  messageTextMe: {
+    color: Colors.textPrimary,
+  },
+  messageTextFriend: {
+    color: Colors.textPrimary,
+  },
+  messageFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    marginTop: 4,
+    alignSelf: "flex-end",
+  },
+  messageTime: {
+    fontSize: FontSizes.xs - 1,
+  },
+  messageTimeMe: {
+    color: "#6D54A3", // Darker purple for time text
+  },
+  messageTimeFriend: {
+    color: Colors.textMuted,
+  },
+  messageCheckmarks: {
+    marginLeft: 4,
   },
   headerContainer: {
     position: "absolute",
