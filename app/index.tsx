@@ -13,7 +13,9 @@ import { scheduleOnRN } from "react-native-worklets";
 import { Colors, FontSizes } from "@/constants/theme";
 import { useAuth } from "@/providers/AuthProvider";
 
-export default function SplashScreen() {
+import * as SplashScreen from 'expo-splash-screen';
+
+export default function SplashScreenComponent() {
   const router = useRouter();
 
   const { user, isProfileComplete, isLoading } = useAuth();
@@ -36,27 +38,40 @@ export default function SplashScreen() {
   }, [router, user, isProfileComplete, isLoading]);
 
   useEffect(() => {
-    titleOpacity.value = withTiming(1, {
-      duration: 500,
-      easing: Easing.out(Easing.cubic),
-    });
+    if (isLoading) return;
 
-    titleScale.value = withTiming(1, {
-      duration: 500,
-      easing: Easing.out(Easing.back(1.5)),
-    });
+    if (user && isProfileComplete) {
+      // If already signed in, navigate immediately and hide native splash
+      scheduleOnRN(() => {
+        router.replace("/main");
+        setTimeout(() => SplashScreen.hideAsync(), 100);
+      });
+    } else {
+      // If not signed in, show JS splash screen and play animation
+      SplashScreen.hideAsync();
 
-    dotOpacity.value = withDelay(350, withTiming(1, { duration: 300 }));
+      titleOpacity.value = withTiming(1, {
+        duration: 500,
+        easing: Easing.out(Easing.cubic),
+      });
 
-    screenOpacity.value = withDelay(
-      1200,
-      withTiming(0, { duration: 400 }, (finished) => {
-        if (finished) {
-          scheduleOnRN(navigateNext);
-        }
-      })
-    );
-  }, [titleOpacity, titleScale, dotOpacity, screenOpacity, navigateNext]);
+      titleScale.value = withTiming(1, {
+        duration: 500,
+        easing: Easing.out(Easing.back(1.5)),
+      });
+
+      dotOpacity.value = withDelay(350, withTiming(1, { duration: 300 }));
+
+      screenOpacity.value = withDelay(
+        800,
+        withTiming(0, { duration: 400 }, (finished) => {
+          if (finished) {
+            scheduleOnRN(navigateNext);
+          }
+        })
+      );
+    }
+  }, [isLoading, user, isProfileComplete, navigateNext]);
 
   const screenStyle = useAnimatedStyle(() => ({
     opacity: screenOpacity.value,

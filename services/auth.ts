@@ -10,7 +10,7 @@ import {
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import Constants from "expo-constants";
 
-import { saveUserProfileData } from "./firestore";
+import { saveUserProfileData, updateUserPresence } from "./firestore";
 
 import { auth } from "./firebase";
 
@@ -112,6 +112,10 @@ export function getCurrentUser(): FirebaseAuthTypes.User | null {
 
 export async function signOut(): Promise<void> {
   try {
+    const user = auth.currentUser;
+    if (user) {
+      await updateUserPresence(user.uid, 'offline');
+    }
     await firebaseSignOut(auth);
   } catch (error) {
     throw handleAuthError(error, "[Auth] signOut error");

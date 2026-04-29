@@ -2,13 +2,14 @@ import { TextInput } from "@/components/ui/text-input";
 import { BorderRadius, Colors, FontSizes, Spacing } from "@/constants/theme";
 import { useAuth } from "@/providers/AuthProvider";
 import { Ionicons } from "@expo/vector-icons";
-import firestore from "@react-native-firebase/firestore";
-import { router } from "expo-router";
+import { collection, doc, getDoc, getDocs, query, where } from "@react-native-firebase/firestore";
 import { Image } from "expo-image";
-import { useMemo, useState } from "react";
+import { router } from "expo-router";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -23,10 +24,41 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ContactProfile, useContacts } from "@/hooks/useContacts";
+import { firestore } from "@/services/firebase";
 import { addContactToFirestore } from "@/services/firestore";
 
 type SortOption = "name" | "lastTimeOnline";
 type AddContactMethod = "phone" | "login";
+
+function BlinkingDot() {
+  const opacity = useRef(new Animated.Value(0.4)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 0.4,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [opacity]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.blinkingDot,
+        { opacity }
+      ]}
+    />
+  );
+}
 
 export default function ContactsScreen() {
   const { user } = useAuth();
@@ -86,20 +118,16 @@ export default function ContactsScreen() {
       if (addMethod === "login") {
         const cleanLogin = newContactLogin.trim().toLowerCase();
 
-        const usernameDoc = await firestore()
-          .collection("usernames")
-          .doc(cleanLogin)
-          .get();
+        const usernameDoc = await getDoc(doc(firestore, "usernames", cleanLogin));
 
         if (usernameDoc.exists()) {
           foundUserId = usernameDoc.data()?.userId;
         }
       } else {
         const cleanPhone = newContactPhone.trim();
-        const usersSnapshot = await firestore()
-          .collection("users")
-          .where("phoneNumber", "==", cleanPhone)
-          .get();
+        const usersRef = collection(firestore, "users");
+        const q = query(usersRef, where("phoneNumber", "==", cleanPhone));
+        const usersSnapshot = await getDocs(q);
 
         if (!usersSnapshot.empty) {
           foundUserId = usersSnapshot.docs[0].id;
@@ -134,7 +162,7 @@ export default function ContactsScreen() {
     try {
       if (!user?.uid) return;
 
-      const userDoc = await firestore().collection("users").doc(user.uid).get();
+      const userDoc = await getDoc(doc(firestore, "users", user.uid));
 
       if (!userDoc.exists()) return;
 
@@ -174,15 +202,20 @@ export default function ContactsScreen() {
       </View>
       <View style={styles.contactInfo}>
         <Text style={styles.contactName}>{item.name}</Text>
-        <Text
-          style={[
-            styles.contactStatus,
-            item.status === "online" ? styles.contactStatusOnline : undefined,
-          ]}
-          numberOfLines={1}
-        >
-          {item.status === "online" ? "🟢 Online" : "Offline"}
-        </Text>
+        <View style={styles.statusRow}>
+          {item.status === "online" ? (
+            <>
+              <BlinkingDot />
+              <Text style={[styles.contactStatus, styles.contactStatusOnline]} numberOfLines={1}>
+                Online
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.contactStatus} numberOfLines={1}>
+              Offline
+            </Text>
+          )}
+        </View>
       </View>
     </Pressable>
   );
@@ -521,6 +554,17 @@ const styles = StyleSheet.create({
   contactStatusOnline: {
     color: Colors.primary, // Using primary blue for some pop on "Online"
     fontWeight: "500",
+  },
+  statusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  blinkingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#4ade80",
+    marginRight: 6,
   },
   emptyContainer: {
     alignItems: "center",

@@ -1,7 +1,8 @@
 import { getCurrentUser, onAuthStateChanged } from "@/services/auth";
+import { firestore } from "@/services/firebase";
 import { updateUserPresence } from "@/services/firestore";
 import { FirebaseAuthTypes } from "@react-native-firebase/auth";
-import firestore from "@react-native-firebase/firestore";
+import { doc, getDoc } from "@react-native-firebase/firestore";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { AppState, AppStateStatus } from "react-native";
 
@@ -27,7 +28,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (currentUser) {
         try {
-          const userDoc = await firestore().collection("users").doc(currentUser.uid).get();
+          const userDoc = await getDoc(doc(firestore, "users", currentUser.uid));
           setIsProfileComplete(userDoc.exists());
           
           if (userDoc.exists()) {
@@ -75,7 +76,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (updatedUser) {
       try {
-        const userDoc = await firestore().collection("users").doc(updatedUser.uid).get();
+        const userDoc = await getDoc(doc(firestore, "users", updatedUser.uid));
 
         setIsProfileComplete(userDoc.exists());
         

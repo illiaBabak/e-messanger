@@ -1,4 +1,12 @@
-import firestore, { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import { 
+  doc, 
+  getDoc, 
+  runTransaction, 
+  serverTimestamp, 
+  setDoc, 
+  updateDoc 
+} from '@react-native-firebase/firestore';
+import { firestore } from './firebase';
 
 export class FirestoreError extends Error {
   code: string;
@@ -12,7 +20,7 @@ export class FirestoreError extends Error {
 
 export async function isLoginAvailable(login: string): Promise<boolean> {
   try {
-    const usernameDoc = await firestore().collection('usernames').doc(login).get();
+    const usernameDoc = await getDoc(doc(firestore, 'usernames', login));
 
     return !usernameDoc.exists();
   } catch (error) {
@@ -27,13 +35,11 @@ export async function saveUserProfileData(
   name: string,
   photoURL: string | null
 ): Promise<void> {
-  const db = firestore();
-  
-  const userRef = db.collection('users').doc(userId);
-  const usernameRef = db.collection('usernames').doc(login);
+  const userRef = doc(firestore, 'users', userId);
+  const usernameRef = doc(firestore, 'usernames', login);
 
   try {
-    await db.runTransaction(async (transaction) => {
+    await runTransaction(firestore, async (transaction) => {
       const usernameDoc = await transaction.get(usernameRef);
       
       if (usernameDoc.exists() && usernameDoc.data()?.userId !== userId) {
@@ -47,7 +53,7 @@ export async function saveUserProfileData(
         login,
         name,
         photoURL,
-        createdAt: firestore.FieldValue.serverTimestamp(),
+        createdAt: serverTimestamp(),
       }, { merge: true });
     });
   } catch (error) {
@@ -59,9 +65,10 @@ export async function saveUserProfileData(
 
 export async function updateUserPresence(uid: string, status: 'online' | 'offline'): Promise<void> {
   try {
-    await firestore().collection('users').doc(uid).update({
+    const userRef = doc(firestore, 'users', uid);
+    await updateDoc(userRef, {
       status,
-      lastSeenMs: firestore.FieldValue.serverTimestamp(),
+      lastSeenMs: serverTimestamp(),
     });
   } catch (error) {
     console.error('[Firestore] updateUserPresence error', error);
@@ -70,22 +77,20 @@ export async function updateUserPresence(uid: string, status: 'online' | 'offlin
 
 export async function addContactToFirestore(uid: string, contactId: string, alias?: string): Promise<void> {
   try {
-    const data: { addedAt: FirebaseFirestoreTypes.FieldValue; alias?: string } = {
-      addedAt: firestore.FieldValue.serverTimestamp(),
+    const contactRef = doc(firestore, 'users', uid, 'contacts', contactId);
+    
+    const data: { addedAt: ReturnType<typeof serverTimestamp>; alias?: string } = {
+      addedAt: serverTimestamp(),
     };
     
     if (alias) {
       data.alias = alias;
     }
 
-    await firestore()
-      .collection('users')
-      .doc(uid)
-      .collection('contacts')
-      .doc(contactId)
-      .set(data, { merge: true });
+    await setDoc(contactRef, data, { merge: true });
   } catch (error) {
     console.error('[Firestore] addContactToFirestore error', error);
     throw new FirestoreError('Failed to add contact', 'firestore/write-failed');
   }
 }
+

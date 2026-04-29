@@ -1,5 +1,6 @@
-import firestore from "@react-native-firebase/firestore";
+import { collection, doc, onSnapshot, query, where } from "@react-native-firebase/firestore";
 import { useEffect, useState } from "react";
+import { firestore } from "../services/firebase";
 
 export type ChatListItem = {
   id: string;
@@ -27,75 +28,74 @@ export function useChatsList(uid: string | undefined | null) {
 
     let profileUnsubscribers: (() => void)[] = [];
 
-    const unsubChats = firestore()
-      .collection("chats")
-      .where("participants", "array-contains", uid)
-      .onSnapshot(
-        (snapshot) => {
-          profileUnsubscribers.forEach((unsub) => unsub());
-          profileUnsubscribers = [];
+    const chatsRef = collection(firestore, "chats");
+    const q = query(chatsRef, where("participants", "array-contains", uid));
 
-          if (!snapshot || snapshot.empty) {
-            setChats([]);
-            setIsLoading(false);
-            return;
-          }
+    const unsubChats = onSnapshot(
+      q,
+      (snapshot) => {
+        profileUnsubscribers.forEach((unsub) => unsub());
+        profileUnsubscribers = [];
 
-          const chatsData = snapshot.docs.map((doc) => {
-            const data = doc.data();
+        if (!snapshot || snapshot.empty) {
+          setChats([]);
+          setIsLoading(false);
+          return;
+        }
 
-            const friendId = data.participants.find((id: string) => id !== uid) || "";
+        const chatsData = snapshot.docs.map((d) => {
+          const data = d.data();
 
-            return {
-              id: doc.id,
-              friendId,
-              lastMessageText: data.lastMessage?.text || "",
-              lastMessageSenderId: data.lastMessage?.senderId || "",
-              updatedAt: data.updatedAt?.toMillis() || Date.now(),
-            };
-          });
+          const friendId = data.participants.find((id: string) => id !== uid) || "";
 
-          const chatMap = new Map<string, ChatListItem>();
-          let initialLoadCount = 0;
+          return {
+            id: d.id,
+            friendId,
+            lastMessageText: data.lastMessage?.text || "",
+            lastMessageSenderId: data.lastMessage?.senderId || "",
+            updatedAt: data.updatedAt?.toMillis() || Date.now(),
+          };
+        });
 
-          chatsData.forEach((chatMeta) => {
-             if (!chatMeta.friendId) {
-               initialLoadCount++;
-               return;
+        const chatMap = new Map<string, ChatListItem>();
+        let initialLoadCount = 0;
+
+        chatsData.forEach((chatMeta) => {
+           if (!chatMeta.friendId) {
+             initialLoadCount++;
+             return;
+           }
+
+           const friendRef = doc(firestore, "users", chatMeta.friendId);
+           const unsubProfile = onSnapshot(friendRef, (friendDoc) => {
+             const data = friendDoc.data();
+
+             if (data) {
+                chatMap.set(chatMeta.id, {
+                   ...chatMeta,
+                   name: data.name || "Unknown",
+                   status: data.status || "offline",
+                   photoURL: data.photoURL,
+                });
+                
+                const newChats = Array.from(chatMap.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+                setChats(newChats);
              }
 
-             const unsubProfile = firestore()
-               .collection("users")
-               .doc(chatMeta.friendId)
-               .onSnapshot((doc) => {
-                 const data = doc.data();
-
-                 if (data) {
-                    chatMap.set(chatMeta.id, {
-                       ...chatMeta,
-                       name: data.name || "Unknown",
-                       status: data.status || "offline",
-                       photoURL: data.photoURL,
-                    });
-                    
-                    const newChats = Array.from(chatMap.values()).sort((a, b) => b.updatedAt - a.updatedAt);
-                    setChats(newChats);
-                 }
-
-                 initialLoadCount++;
-                 
-                 if (initialLoadCount >= chatsData.length) {
-                    setIsLoading(false);
-                 }
-               });
-             profileUnsubscribers.push(unsubProfile);
-          });
-        },
-        (error) => {
-          console.error("Error fetching chats list", error);
-          setIsLoading(false);
-        }
-      );
+             initialLoadCount++;
+             
+             if (initialLoadCount >= chatsData.length) {
+                setIsLoading(false);
+             }
+           });
+           profileUnsubscribers.push(unsubProfile);
+        });
+      },
+      (error) => {
+        console.error("Error fetching chats list", error);
+        setIsLoading(false);
+      }
+    );
 
     return () => {
       unsubChats();

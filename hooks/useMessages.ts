@@ -1,5 +1,32 @@
-import firestore from "@react-native-firebase/firestore";
+import {
+  arrayUnion,
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  writeBatch,
+  getDoc,
+  Timestamp
+} from "@react-native-firebase/firestore";
 import { useEffect, useState } from "react";
+import { firestore } from "../services/firebase";
+
+export type ReplyToSnippet = {
+  id: string;
+  text: string;
+  senderId: string;
+};
+
+export type PinnedMessage = {
+  id: string;
+  text: string;
+  senderId: string;
+};
 
 export type Message = {
   id: string;
@@ -7,10 +34,15 @@ export type Message = {
   senderId: string;
   createdAt: number;
   isRead: boolean;
+  deletedFor?: string[];
+  replyTo?: ReplyToSnippet;
+  isForwarded?: boolean;
+  isEdited?: boolean;
 };
 
 export function useMessages(currentUserId: string | undefined | null, contactId: string | undefined) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const chatId = currentUserId && contactId 
@@ -20,19 +52,18 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
   useEffect(() => {
     if (!chatId || !currentUserId) {
       setMessages([]);
+      setPinnedMessages([]);
       setIsLoading(false);
       return;
     }
 
     setIsLoading(true);
 
-    const messagesRef = firestore()
-      .collection("chats")
-      .doc(chatId)
-      .collection("messages")
-      .orderBy("createdAt", "asc");
+    const messagesRef = collection(firestore, "chats", chatId, "messages");
+    const q = query(messagesRef, orderBy("createdAt", "asc"));
 
-    const unsubscribe = messagesRef.onSnapshot(
+    const unsubscribe = onSnapshot(
+      q,
       (snapshot) => {
         if (!snapshot || snapshot.empty) {
           setMessages([]);
@@ -43,19 +74,28 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         const newMessages: Message[] = [];
         const unreadMessageIds: string[] = [];
 
-        snapshot.docs.forEach((doc) => {
-          const data = doc.data();
+        snapshot.docs.forEach((d) => {
+          const data = d.data();
+          const deletedFor = data.deletedFor || [];
+          
+          if (deletedFor.includes(currentUserId)) {
+            return;
+          }
         
           newMessages.push({
-            id: doc.id,
+            id: d.id,
             text: data.text || "",
             senderId: data.senderId,
             createdAt: data.createdAt?.toMillis() || Date.now(),
             isRead: data.isRead || false,
+            deletedFor: data.deletedFor || [],
+            replyTo: data.replyTo,
+            isForwarded: data.isForwarded,
+            isEdited: data.isEdited,
           });
 
           if (data.senderId !== currentUserId && !data.isRead) {
-            unreadMessageIds.push(doc.id);
+            unreadMessageIds.push(d.id);
           }
         });
 
@@ -63,11 +103,10 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         setIsLoading(false);
 
         if (unreadMessageIds.length > 0) {
-          const batch = firestore().batch();
+          const batch = writeBatch(firestore);
 
           unreadMessageIds.forEach((id) => {
-            const docRef = firestore().collection("chats").doc(chatId).collection("messages").doc(id);
-            
+            const docRef = doc(firestore, "chats", chatId, "messages", id);
             batch.update(docRef, { isRead: true });
           });
 
@@ -80,26 +119,47 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
       }
     );
 
-    return () => unsubscribe();
+    // Separate listener for the chat document to get pinnedMessage
+    const chatRef = doc(firestore, "chats", chatId);
+    const unsubscribeChat = onSnapshot(chatRef, (chatDoc) => {
+      const data = chatDoc.data();
+      if (data) {
+        let pins: PinnedMessage[] = [];
+        if (Array.isArray(data.pinnedMessages)) {
+          pins = data.pinnedMessages;
+        } else if (data.pinnedMessage) {
+          pins = [data.pinnedMessage];
+        }
+        setPinnedMessages(pins);
+      } else {
+        setPinnedMessages([]);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      unsubscribeChat();
+    };
   }, [chatId, currentUserId]);
 
-  const sendMessage = async (text: string) => {
+  const sendMessage = async (text: string, replyTo?: ReplyToSnippet) => {
     if (!chatId || !currentUserId || !contactId || !text.trim()) return;
 
     const messageData = {
       text: text.trim(),
       senderId: currentUserId,
-      createdAt: firestore.FieldValue.serverTimestamp(),
+      createdAt: serverTimestamp(),
       isRead: false,
+      ...(replyTo && { replyTo }),
     };
 
     try {
-      const batch = firestore().batch();
+      const batch = writeBatch(firestore);
 
-      const newMessageRef = firestore().collection("chats").doc(chatId).collection("messages").doc();
+      const newMessageRef = doc(collection(firestore, "chats", chatId, "messages"));
       batch.set(newMessageRef, messageData);
 
-      const chatRef = firestore().collection("chats").doc(chatId);
+      const chatRef = doc(firestore, "chats", chatId);
       
       batch.set(
         chatRef,
@@ -108,9 +168,9 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
           lastMessage: {
             text: text.trim(),
             senderId: currentUserId,
-            createdAt: firestore.FieldValue.serverTimestamp(),
+            createdAt: serverTimestamp(),
           },
-          updatedAt: firestore.FieldValue.serverTimestamp(),
+          updatedAt: serverTimestamp(),
         },
         { merge: true }
       );
@@ -121,5 +181,151 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
     }
   };
 
-  return { messages, isLoading, sendMessage };
+  const deleteMessage = async (messageId: string, type: "me" | "everyone") => {
+    if (!chatId || !currentUserId) return;
+    
+    try {
+      const docRef = doc(firestore, "chats", chatId, "messages", messageId);
+      
+      if (type === "everyone") {
+        await deleteDoc(docRef);
+      } else {
+        await updateDoc(docRef, {
+          deletedFor: arrayUnion(currentUserId)
+        });
+      }
+    } catch (error) {
+      console.error("Error deleting message:", error);
+      throw error;
+    }
+  };
+
+  const deleteMultipleMessages = async (messageIds: string[], type: "me" | "everyone") => {
+    if (!chatId || !currentUserId || messageIds.length === 0) return;
+    
+    try {
+      const batch = writeBatch(firestore);
+      
+      messageIds.forEach(messageId => {
+        const docRef = doc(firestore, "chats", chatId, "messages", messageId);
+        
+        if (type === "everyone") {
+          batch.delete(docRef);
+        } else {
+          batch.update(docRef, {
+            deletedFor: arrayUnion(currentUserId)
+          });
+        }
+      });
+      
+      await batch.commit();
+    } catch (error) {
+      console.error("Error deleting multiple messages:", error);
+      throw error;
+    }
+  };
+
+  const togglePinMessage = async (message: PinnedMessage) => {
+    if (!chatId) return;
+    const chatRef = doc(firestore, "chats", chatId);
+    try {
+      const chatDoc = await getDoc(chatRef);
+      const data = chatDoc.data();
+      
+      let pins: PinnedMessage[] = [];
+      if (data && Array.isArray(data.pinnedMessages)) {
+        pins = data.pinnedMessages;
+      } else if (data && data.pinnedMessage) {
+        pins = [data.pinnedMessage];
+      }
+      
+      const exists = pins.some(p => p.id === message.id);
+      if (exists) {
+        pins = pins.filter(p => p.id !== message.id);
+      } else {
+        pins.push(message);
+      }
+      
+      if (data) {
+        await updateDoc(chatRef, {
+          pinnedMessages: pins,
+          pinnedMessage: null // migrate old field
+        });
+      } else {
+        await setDoc(chatRef, {
+          pinnedMessages: pins,
+          pinnedMessage: null
+        });
+      }
+    } catch (error) {
+      console.error("Error toggling pinned message:", error);
+    }
+  };
+
+  const forwardMessages = async (targetContactId: string, messagesToForward: Message[]) => {
+    if (!currentUserId || !targetContactId || messagesToForward.length === 0) return;
+    
+    const targetChatId = [currentUserId, targetContactId].sort().join("_");
+    
+    try {
+      const batch = writeBatch(firestore);
+      
+      messagesToForward.forEach((msg, index) => {
+        const newMessageRef = doc(collection(firestore, "chats", targetChatId, "messages"));
+        batch.set(newMessageRef, {
+          text: msg.text,
+          senderId: currentUserId,
+          createdAt: Timestamp.fromMillis(Date.now() + index),
+          isRead: false,
+          isForwarded: true,
+        });
+      });
+      
+      const chatRef = doc(firestore, "chats", targetChatId);
+      batch.set(
+        chatRef,
+        {
+          participants: [currentUserId, targetContactId],
+          lastMessage: {
+            text: messagesToForward[messagesToForward.length - 1].text,
+            senderId: currentUserId,
+            createdAt: serverTimestamp(),
+          },
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      
+      await batch.commit();
+    } catch (error) {
+      console.error("Error forwarding messages:", error);
+      throw error;
+    }
+  };
+
+  const editMessage = async (messageId: string, newText: string) => {
+    if (!chatId || !newText.trim()) return;
+    
+    try {
+      const messageRef = doc(firestore, "chats", chatId, "messages", messageId);
+      await updateDoc(messageRef, {
+        text: newText.trim(),
+        isEdited: true
+      });
+    } catch (error) {
+      console.error("Error editing message:", error);
+    }
+  };
+
+  return { 
+    messages, 
+    pinnedMessages,
+    isLoading, 
+    sendMessage, 
+    deleteMessage, 
+    deleteMultipleMessages,
+    togglePinMessage,
+    forwardMessages,
+    editMessage
+  };
 }
