@@ -22,6 +22,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { ChatInput } from "@/components/chat/ChatInput";
+import { VoiceMessagePlayer } from "@/components/chat/VoiceMessagePlayer";
 import { Colors, FontSizes, Spacing } from "@/constants/theme";
 import { useChatsList } from "@/hooks/useChatsList";
 import { useContacts } from "@/hooks/useContacts";
@@ -167,7 +169,7 @@ export default function ChatScreen() {
 
       setMessageText("");
       const replySnippet = replyingToMessage 
-        ? { id: replyingToMessage.id, text: replyingToMessage.text, senderId: replyingToMessage.senderId }
+        ? { id: replyingToMessage.id, text: replyingToMessage.audio ? "🎤 Voice message" : replyingToMessage.text, senderId: replyingToMessage.senderId }
         : undefined;
       
       setReplyingToMessage(null);
@@ -292,7 +294,11 @@ export default function ChatScreen() {
 
   const handlePinAction = () => {
     if (selectedMessage) {
-      togglePinMessage({ id: selectedMessage.id, text: selectedMessage.text, senderId: selectedMessage.senderId });
+      togglePinMessage({
+        id: selectedMessage.id,
+        text: selectedMessage.audio ? "🎤 Voice message" : selectedMessage.text,
+        senderId: selectedMessage.senderId,
+      });
       closeMenu();
     }
   };
@@ -449,15 +455,25 @@ export default function ChatScreen() {
                   <Text style={[styles.bubbleReplyName, isMe ? styles.bubbleReplyNameMe : styles.bubbleReplyNameFriend]}>
                     {item.replyTo.senderId === user?.uid ? "You" : name}
                   </Text>
-                  <Text style={[styles.bubbleReplyText, isMe ? styles.bubbleReplyTextMe : styles.bubbleReplyTextFriend]} numberOfLines={2}>
-                    {item.replyTo.text}
+                  <Text style={[styles.bubbleReplyText, isMe ? styles.bubbleReplyTextMe : styles.bubbleReplyTextFriend]} numberOfLines={1}>
+                    {item.replyTo.text || "🎤 Voice message"}
                   </Text>
                 </View>
               </Pressable>
             )}
-            <Text style={[styles.messageText, isMe ? styles.messageTextMe : styles.messageTextFriend]}>
-              {item.text}
-            </Text>
+            {item.audio ? (
+              <VoiceMessagePlayer
+                messageId={item.id}
+                url={item.audio.url}
+                duration={item.audio.duration}
+                waveform={item.audio.waveform}
+                isOwnMessage={isMe}
+              />
+            ) : (
+              <Text style={[styles.messageText, isMe ? styles.messageTextMe : styles.messageTextFriend]}>
+                {item.text}
+              </Text>
+            )}
             <View style={styles.messageFooter}>
               {item.isEdited && (
                 <Text style={[styles.messageEdited, isMe ? styles.messageEditedMe : styles.messageEditedFriend]}>
@@ -589,7 +605,7 @@ export default function ChatScreen() {
                 Pinned Message {pinnedMessages.length > 1 ? `(${activePinnedIndex % pinnedMessages.length + 1}/${pinnedMessages.length})` : ''}
               </Text>
               <Text style={styles.pinnedMessageText} numberOfLines={1}>
-                {activePinnedMessage.text}
+                {activePinnedMessage.text || "🎤 Voice message"}
               </Text>
             </View>
             <Pressable onPress={() => togglePinMessage(activePinnedMessage)} style={styles.pinnedMessageClose}>
@@ -612,64 +628,25 @@ export default function ChatScreen() {
             </Pressable>
           </View>
         ) : (
-          <View
-            style={[
-              styles.footerContainer,
-              { paddingBottom: Math.max(insets.bottom, Spacing.sm) },
-            ]}
-          >
-            <Pressable style={styles.floatingCircle}>
-              <Ionicons name="attach" size={24} color={Colors.textSecondary} />
-            </Pressable>
-
-            <View style={styles.inputAreaWrapper}>
-              {(replyingToMessage || editingMessage) && (
-                <View style={styles.replyPreviewContainer}>
-                  <View style={styles.replyPreviewLine} />
-                  <View style={styles.replyPreviewContent}>
-                    <Text style={styles.replyPreviewName}>
-                      {editingMessage ? "Edit Message" : (replyingToMessage?.senderId === user?.uid ? "You" : name)}
-                    </Text>
-                    <Text style={styles.replyPreviewText} numberOfLines={1}>
-                      {editingMessage ? editingMessage.text : replyingToMessage?.text}
-                    </Text>
-                  </View>
-                  <Pressable onPress={() => { setReplyingToMessage(null); setEditingMessage(null); if(editingMessage) setMessageText(""); }} style={styles.replyPreviewClose}>
-                    <Ionicons name="close-circle" size={20} color={Colors.textMuted} />
-                  </Pressable>
-                </View>
-              )}
-              <View style={styles.floatingInputWrapper}>
-                <TextInput
-                  ref={textInputRef}
-                  style={styles.textInput}
-                  placeholder="Message"
-                  placeholderTextColor={Colors.textMuted}
-                  value={messageText}
-                  onChangeText={handleTextChange}
-                  multiline
-                />
-                <Pressable style={styles.stickerButton}>
-                  <Ionicons
-                    name="happy-outline"
-                    size={24}
-                    color={Colors.textSecondary}
-                  />
-                </Pressable>
-              </View>
-            </View>
-
-            <Pressable style={styles.floatingCirclePrimary} onPress={handleSend}>
-              {messageText.trim() ? (
-                <Ionicons name="arrow-up" size={24} color={Colors.white} />
-              ) : (
-                <Ionicons
-                  name="mic-outline"
-                  size={24}
-                  color={Colors.white}
-                />
-              )}
-            </Pressable>
+          <View style={{ paddingBottom: Math.max(insets.bottom, Spacing.sm) }}>
+            <ChatInput
+              messageText={messageText}
+              setMessageText={handleTextChange}
+              onSendText={handleSend}
+              onSendAudio={(audioInfo) => {
+                sendMessage("", undefined, audioInfo).catch(console.error);
+              }}
+              replyingToMessage={replyingToMessage}
+              editingMessage={editingMessage}
+              onCancelReplyOrEdit={() => {
+                setReplyingToMessage(null);
+                setEditingMessage(null);
+                if (editingMessage) setMessageText("");
+              }}
+              name={name}
+              currentUserId={user?.uid}
+              textInputRef={textInputRef}
+            />
           </View>
         )}
       </KeyboardAvoidingView>
@@ -719,21 +696,31 @@ export default function ChatScreen() {
                         {selectedMessage.replyTo.senderId === user?.uid ? "You" : name}
                       </Text>
                       <Text style={[styles.bubbleReplyText, selectedMessage.senderId === user?.uid ? styles.bubbleReplyTextMe : styles.bubbleReplyTextFriend]} numberOfLines={1}>
-                        {selectedMessage.replyTo.text}
+                        {selectedMessage.replyTo.text || "🎤 Voice message"}
                       </Text>
                     </View>
                   </View>
                 )}
-                <Text
-                  style={[
-                    styles.messageText,
-                    selectedMessage.senderId === user?.uid
-                      ? styles.messageTextMe
-                      : styles.messageTextFriend,
-                  ]}
-                >
-                  {selectedMessage.text}
-                </Text>
+                {selectedMessage.audio ? (
+                  <VoiceMessagePlayer
+                    messageId={selectedMessage.id}
+                    url={selectedMessage.audio.url}
+                    duration={selectedMessage.audio.duration}
+                    waveform={selectedMessage.audio.waveform}
+                    isOwnMessage={selectedMessage.senderId === user?.uid}
+                  />
+                ) : (
+                  <Text
+                    style={[
+                      styles.messageText,
+                      selectedMessage.senderId === user?.uid
+                        ? styles.messageTextMe
+                        : styles.messageTextFriend,
+                    ]}
+                  >
+                    {selectedMessage.text}
+                  </Text>
+                )}
                 <View style={styles.messageFooter}>
                   {selectedMessage.isEdited && (
                     <Text style={[styles.messageEdited, selectedMessage.senderId === user?.uid ? styles.messageEditedMe : styles.messageEditedFriend]}>
@@ -771,16 +758,18 @@ export default function ChatScreen() {
                   <Ionicons name="arrow-undo-outline" size={20} color={Colors.textPrimary} />
                   <Text style={styles.menuItemText}>Reply</Text>
                 </Pressable>
-                {selectedMessage.senderId === user?.uid && (
+                {!selectedMessage.audio && selectedMessage.senderId === user?.uid && (
                   <Pressable style={styles.menuItem} onPress={handleEditAction}>
                     <Ionicons name="pencil-outline" size={20} color={Colors.textPrimary} />
                     <Text style={styles.menuItemText}>Edit</Text>
                   </Pressable>
                 )}
-                <Pressable style={styles.menuItem} onPress={handleCopy}>
-                  <Ionicons name="copy-outline" size={20} color={Colors.textPrimary} />
-                  <Text style={styles.menuItemText}>Copy</Text>
-                </Pressable>
+                {!selectedMessage.audio && (
+                  <Pressable style={styles.menuItem} onPress={handleCopy}>
+                    <Ionicons name="copy-outline" size={20} color={Colors.textPrimary} />
+                    <Text style={styles.menuItemText}>Copy</Text>
+                  </Pressable>
+                )}
                 <Pressable style={styles.menuItem} onPress={handlePinAction}>
                   <Ionicons name={pinnedMessages.some(p => p.id === selectedMessage.id) ? "pin" : "pin-outline"} size={20} color={Colors.textPrimary} />
                   <Text style={styles.menuItemText}>

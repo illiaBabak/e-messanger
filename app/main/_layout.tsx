@@ -2,9 +2,24 @@ import { Colors } from '@/constants/theme';
 import { useAuth } from '@/providers/AuthProvider';
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, Tabs } from 'expo-router';
+import { useEffect } from 'react';
+import { requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
 
 export default function MainLayout() {
   const { user, isProfileComplete, isLoading } = useAuth();
+
+  useEffect(() => {
+    if (user && isProfileComplete) {
+      const initAudio = async () => {
+        try {
+          await requestRecordingPermissionsAsync();
+        } catch (e) {
+          console.error('Failed to initialize audio mode:', e);
+        }
+      };
+      initAudio();
+    }
+  }, [user, isProfileComplete]);
 
   if (isLoading) return null; 
 

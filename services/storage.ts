@@ -33,3 +33,25 @@ export async function uploadProfilePicture(
     throw new StorageError("Failed to upload image", "storage/upload-failed");
   }
 }
+
+export async function uploadVoiceMessage(
+  uri: string,
+  chatId: string,
+  messageId: string
+): Promise<string> {
+  try {
+    const cleanUri = uri.replace("file://", "");
+    const extension = cleanUri.split(".").pop() || "m4a";
+
+    const filename = `chats/${chatId}/audio/${messageId}.${extension}`;
+    const storageRef = ref(storage, filename);
+
+    await putFile(storageRef, cleanUri);
+    const downloadURL = await getDownloadURL(storageRef);
+
+    return downloadURL;
+  } catch (error) {
+    console.error("[Storage] uploadVoiceMessage error", error);
+    throw new StorageError("Failed to upload voice message", "storage/upload-failed");
+  }
+}

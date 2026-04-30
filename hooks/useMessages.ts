@@ -16,6 +16,7 @@ import {
 } from "@react-native-firebase/firestore";
 import { useEffect, useState } from "react";
 import { firestore } from "../services/firebase";
+import { uploadVoiceMessage } from "../services/storage";
 
 export type ReplyToSnippet = {
   id: string;
@@ -39,6 +40,11 @@ export type Message = {
   replyTo?: ReplyToSnippet;
   isForwarded?: boolean;
   isEdited?: boolean;
+  audio?: {
+    url: string;
+    duration: number;
+    waveform: number[];
+  };
 };
 
 export function useMessages(currentUserId: string | undefined | null, contactId: string | undefined) {
@@ -94,6 +100,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
             replyTo: data.replyTo,
             isForwarded: data.isForwarded,
             isEdited: data.isEdited,
+            audio: data.audio,
           });
 
           if (data.senderId !== currentUserId && !data.isRead) {
@@ -174,21 +181,38 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
     }
   };
 
-  const sendMessage = async (text: string, replyTo?: ReplyToSnippet) => {
-    if (!chatId || !currentUserId || !contactId || !text.trim()) return;
-
-    const messageData = {
-      text: text.trim(),
-      senderId: currentUserId,
-      createdAt: serverTimestamp(),
-      isRead: false,
-      ...(replyTo && { replyTo }),
-    };
+  const sendMessage = async (
+    text: string, 
+    replyTo?: ReplyToSnippet,
+    audioInfo?: { uri: string; duration: number; waveform: number[] }
+  ) => {
+    if (!chatId || !currentUserId || !contactId) return;
+    if (!text.trim() && !audioInfo) return;
 
     try {
       const batch = writeBatch(firestore);
-
       const newMessageRef = doc(collection(firestore, "chats", chatId, "messages"));
+      
+      let audioUrl;
+      if (audioInfo) {
+        audioUrl = await uploadVoiceMessage(audioInfo.uri, chatId, newMessageRef.id);
+      }
+
+      const messageData = {
+        text: text.trim(),
+        senderId: currentUserId,
+        createdAt: serverTimestamp(),
+        isRead: false,
+        ...(replyTo && { replyTo }),
+        ...(audioInfo && audioUrl && {
+          audio: {
+            url: audioUrl,
+            duration: audioInfo.duration,
+            waveform: audioInfo.waveform,
+          }
+        })
+      };
+
       batch.set(newMessageRef, messageData);
 
       const chatRef = doc(firestore, "chats", chatId);
@@ -198,7 +222,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         {
           participants: [currentUserId, contactId],
           lastMessage: {
-            text: text.trim(),
+            text: audioInfo ? "🎤 Voice message" : text.trim(),
             senderId: currentUserId,
             createdAt: serverTimestamp(),
           },
@@ -213,6 +237,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
       await batch.commit();
     } catch (error) {
       console.error("Error sending message:", error);
+      throw error;
     }
   };
 

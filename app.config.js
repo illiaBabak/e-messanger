@@ -68,7 +68,8 @@ export default {
             ]
           }
         }
-      ]
+      ],
+      "expo-audio"
     ],
     experiments: {
       typedRoutes: true,
