@@ -11,6 +11,7 @@ export type ChatListItem = {
   lastMessageText: string;
   lastMessageSenderId: string;
   updatedAt: number;
+  unreadCount: number;
 };
 
 export function useChatsList(uid: string | undefined | null) {
@@ -54,6 +55,7 @@ export function useChatsList(uid: string | undefined | null) {
             lastMessageText: data.lastMessage?.text || "",
             lastMessageSenderId: data.lastMessage?.senderId || "",
             updatedAt: data.updatedAt?.toMillis() || Date.now(),
+            unreadCount: data.unreadCount?.[uid] || 0,
           };
         });
 

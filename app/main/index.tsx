@@ -67,10 +67,19 @@ export default function ChatsScreen() {
               {formatChatTime(item.updatedAt)}
             </Text>
           </View>
-          <Text style={styles.lastMessage} numberOfLines={2}>
-            {item.lastMessageSenderId === user?.uid ? "You: " : ""}
-            {item.lastMessageText}
-          </Text>
+          <View style={styles.lastMessageRow}>
+            <Text style={styles.lastMessage} numberOfLines={2}>
+              {item.lastMessageSenderId === user?.uid ? "You: " : ""}
+              {item.lastMessageText}
+            </Text>
+            {item.unreadCount > 0 && (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadBadgeText}>
+                  {item.unreadCount > 99 ? "99+" : item.unreadCount}
+                </Text>
+              </View>
+            )}
+          </View>
         </View>
       </Pressable>
     );
@@ -177,9 +186,30 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm,
     color: Colors.textSecondary,
   },
+  lastMessageRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   lastMessage: {
     fontSize: FontSizes.sm,
     color: Colors.textSecondary,
     lineHeight: 20,
+    flex: 1,
+    paddingRight: Spacing.sm,
+  },
+  unreadBadge: {
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 6,
+  },
+  unreadBadgeText: {
+    color: Colors.white,
+    fontSize: 12,
+    fontWeight: "bold",
   },
 });

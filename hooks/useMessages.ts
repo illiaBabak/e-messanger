@@ -3,6 +3,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  increment,
   onSnapshot,
   orderBy,
   query,
@@ -43,6 +44,7 @@ export type Message = {
 export function useMessages(currentUserId: string | undefined | null, contactId: string | undefined) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([]);
+  const [isFriendTyping, setIsFriendTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   const chatId = currentUserId && contactId 
@@ -110,6 +112,11 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
             batch.update(docRef, { isRead: true });
           });
 
+          const chatRef = doc(firestore, "chats", chatId);
+          batch.update(chatRef, {
+            [`unreadCount.${currentUserId}`]: 0
+          });
+
           batch.commit().catch(console.error);
         }
       },
@@ -119,7 +126,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
       }
     );
 
-    // Separate listener for the chat document to get pinnedMessage
+    // Separate listener for the chat document to get pinnedMessage and typing status
     const chatRef = doc(firestore, "chats", chatId);
     const unsubscribeChat = onSnapshot(chatRef, (chatDoc) => {
       const data = chatDoc.data();
@@ -131,8 +138,15 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
           pins = [data.pinnedMessage];
         }
         setPinnedMessages(pins);
+        
+        if (contactId && data.typing?.[contactId]) {
+          setIsFriendTyping(true);
+        } else {
+          setIsFriendTyping(false);
+        }
       } else {
         setPinnedMessages([]);
+        setIsFriendTyping(false);
       }
     });
 
@@ -140,7 +154,25 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
       unsubscribe();
       unsubscribeChat();
     };
-  }, [chatId, currentUserId]);
+  }, [chatId, currentUserId, contactId]);
+
+  const setTyping = async (isTyping: boolean) => {
+    if (!chatId || !currentUserId) return;
+    try {
+      const chatRef = doc(firestore, "chats", chatId);
+      await setDoc(
+        chatRef,
+        {
+          typing: {
+            [currentUserId]: isTyping
+          }
+        },
+        { merge: true }
+      );
+    } catch (error) {
+      console.error("Error updating typing status:", error);
+    }
+  };
 
   const sendMessage = async (text: string, replyTo?: ReplyToSnippet) => {
     if (!chatId || !currentUserId || !contactId || !text.trim()) return;
@@ -171,6 +203,9 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
             createdAt: serverTimestamp(),
           },
           updatedAt: serverTimestamp(),
+          unreadCount: {
+            [contactId]: increment(1)
+          },
         },
         { merge: true }
       );
@@ -292,6 +327,9 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
             createdAt: serverTimestamp(),
           },
           updatedAt: serverTimestamp(),
+          unreadCount: {
+            [targetContactId]: increment(messagesToForward.length)
+          },
         },
         { merge: true }
       );
@@ -320,12 +358,14 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
   return { 
     messages, 
     pinnedMessages,
+    isFriendTyping,
     isLoading, 
     sendMessage, 
     deleteMessage, 
     deleteMultipleMessages,
     togglePinMessage,
     forwardMessages,
-    editMessage
+    editMessage,
+    setTyping
   };
 }

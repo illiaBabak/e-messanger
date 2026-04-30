@@ -1,4 +1,4 @@
-import { getDownloadURL, ref, uploadBytes } from "@react-native-firebase/storage";
+import { getDownloadURL, putFile, ref } from "@react-native-firebase/storage";
 import { storage } from "./firebase";
 
 export class StorageError extends Error {
@@ -16,16 +16,14 @@ export async function uploadProfilePicture(
   userId: string
 ): Promise<string> {
   try {
-    const extension = uri.split(".").pop() || "jpg";
+    const cleanUri = uri.replace("file://", "");
+    const extension = cleanUri.split(".").pop() || "jpg";
+
     const filename = `avatars/${userId}.${extension}`;
 
     const storageRef = ref(storage, filename);
 
-    const response = await fetch(uri);
-    
-    const blob = await response.blob();
-
-    await uploadBytes(storageRef, blob);
+    await putFile(storageRef, cleanUri);
 
     const downloadURL = await getDownloadURL(storageRef);
 

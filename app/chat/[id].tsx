@@ -36,7 +36,7 @@ export default function ChatScreen() {
   const { user } = useAuth();
   const { contacts } = useContacts(user?.uid);
   const { chats } = useChatsList(user?.uid);
-  const { messages, pinnedMessages, sendMessage, deleteMessage, deleteMultipleMessages, togglePinMessage, forwardMessages, editMessage } = useMessages(user?.uid, id as string);
+  const { messages, pinnedMessages, isFriendTyping, sendMessage, deleteMessage, deleteMultipleMessages, togglePinMessage, forwardMessages, editMessage, setTyping } = useMessages(user?.uid, id as string);
 
   const contactInfo = useMemo(() => contacts.find((c) => c.id === id), [contacts, id]);
   const chatInfo = useMemo(() => chats.find((c) => c.friendId === id), [chats, id]);
@@ -46,6 +46,28 @@ export default function ChatScreen() {
   const decodedPhotoURL = contactInfo?.photoURL || chatInfo?.photoURL;
 
   const [messageText, setMessageText] = useState("");
+  const typingTimeoutRef = useRef<number | null>(null);
+
+  const handleTextChange = (text: string) => {
+    setMessageText(text);
+    if (text.length > 0) {
+      setTyping(true);
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        setTyping(false);
+      }, 2000);
+    } else {
+      setTyping(false);
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    };
+  }, []);
+
   const flatListRef = useRef<FlatList>(null);
   
   const [activePinnedIndex, setActivePinnedIndex] = useState(0);
@@ -128,6 +150,9 @@ export default function ChatScreen() {
   const handleSend = async () => {
     const textToSend = messageText.trim();
     if (textToSend) {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      setTyping(false);
+
       if (editingMessage) {
         setMessageText("");
         setEditingMessage(null);
@@ -518,14 +543,20 @@ export default function ChatScreen() {
 
             <View style={styles.floatingPill}>
               <Text style={styles.headerName}>{name}</Text>
-              <Text
-                style={[
-                  styles.headerStatus,
-                  status === "online" && styles.headerStatusOnline,
-                ]}
-              >
-                {status === "online" ? "Online" : "Last seen recently"}
-              </Text>
+              {isFriendTyping ? (
+                <Text style={[styles.headerStatus, styles.headerStatusTyping]}>
+                  typing...
+                </Text>
+              ) : (
+                <Text
+                  style={[
+                    styles.headerStatus,
+                    status === "online" && styles.headerStatusOnline,
+                  ]}
+                >
+                  {status === "online" ? "Online" : "Last seen recently"}
+                </Text>
+              )}
             </View>
 
             <Pressable style={styles.floatingAvatar}>
@@ -615,7 +646,7 @@ export default function ChatScreen() {
                   placeholder="Message"
                   placeholderTextColor={Colors.textMuted}
                   value={messageText}
-                  onChangeText={setMessageText}
+                  onChangeText={handleTextChange}
                   multiline
                 />
                 <Pressable style={styles.stickerButton}>
@@ -951,6 +982,11 @@ const styles = StyleSheet.create({
   },
   headerStatusOnline: {
     color: Colors.primary,
+  },
+  headerStatusTyping: {
+    color: Colors.primary,
+    fontStyle: "italic",
+    fontWeight: "500",
   },
   floatingAvatar: {
     width: 44,
