@@ -69,7 +69,22 @@ export default {
           }
         }
       ],
-      "expo-audio"
+      "expo-audio",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow e-messanger to access your photos.",
+          "savePhotosPermission": "Allow e-messanger to save photos.",
+          "isAccessMediaLocationEnabled": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow e-messanger to access your photos.",
+          "cameraPermission": "Allow e-messanger to access your camera."
+        }
+      ]
     ],
     experiments: {
       typedRoutes: true,

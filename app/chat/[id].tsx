@@ -4,8 +4,9 @@ import * as Clipboard from "expo-clipboard";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   Dimensions,
@@ -29,6 +30,165 @@ import { useChatsList } from "@/hooks/useChatsList";
 import { useContacts } from "@/hooks/useContacts";
 import { Message, useMessages } from "@/hooks/useMessages";
 import { useAuth } from "@/providers/AuthProvider";
+
+type MessageItemProps = {
+  item: Message;
+  currentUserId: string | undefined;
+  contactName: string;
+  isSelectionMode: boolean;
+  isSelected: boolean;
+  isHighlighted: boolean;
+  onPress: (id: string) => void;
+  onLongPress: (item: Message, layout: { x: number; y: number; width: number; height: number }) => void;
+  onScrollToReply: (id: string) => void;
+};
+
+const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, isSelected, isHighlighted, onPress, onLongPress, onScrollToReply }: MessageItemProps) => {
+  const viewRef = useRef<View>(null);
+  const isMe = item.senderId === currentUserId;
+  const highlightOpacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (isHighlighted) {
+      highlightOpacity.setValue(0);
+      Animated.sequence([
+        Animated.timing(highlightOpacity, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(highlightOpacity, {
+          toValue: 0,
+          duration: 400,
+          delay: 400,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [isHighlighted, highlightOpacity]);
+
+  const handlePress = () => {
+    if (isSelectionMode) {
+      onPress(item.id);
+    }
+  };
+
+  const handleLongPress = () => {
+    if (isSelectionMode) return;
+    viewRef.current?.measure((x, y, width, height, pageX, pageY) => {
+      onLongPress(item, { x: pageX, y: pageY, width, height });
+    });
+  };
+
+  return (
+    <View style={styles.messageWrapper}>
+      {isSelectionMode && (
+        <Pressable onPress={handlePress} style={styles.selectionCheckbox}>
+          <Ionicons
+            name={isSelected ? "checkmark-circle" : "ellipse-outline"}
+            size={24}
+            color={isSelected ? Colors.primary : Colors.textMuted}
+          />
+        </Pressable>
+      )}
+      <View style={[styles.messageRow, isMe ? styles.messageRowMe : styles.messageRowFriend]}>
+        <Pressable
+          ref={viewRef}
+          onPress={handlePress}
+          onLongPress={handleLongPress}
+          delayLongPress={250}
+          style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleFriend]}
+        >
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              {
+                 backgroundColor: "rgba(0,0,0,0.15)",
+                 opacity: highlightOpacity,
+                 borderRadius: 20,
+                 borderBottomLeftRadius: isMe ? 20 : 4,
+                 borderBottomRightRadius: isMe ? 4 : 20,
+                 zIndex: 10,
+              }
+            ]}
+          />
+          {item.isForwarded && (
+            <Text style={[styles.forwardedText, isMe ? styles.forwardedTextMe : styles.forwardedTextFriend]}>
+              Forwarded message
+            </Text>
+          )}
+          {item.replyTo && (
+            <Pressable
+              style={[styles.bubbleReplyContainer, isMe ? styles.bubbleReplyContainerMe : styles.bubbleReplyContainerFriend]}
+              onPress={() => onScrollToReply(item.replyTo!.id)}
+            >
+              <View style={[styles.bubbleReplyLine, isMe ? styles.bubbleReplyLineMe : styles.bubbleReplyLineFriend]} />
+              <View style={styles.bubbleReplyContent}>
+                <Text style={[styles.bubbleReplyName, isMe ? styles.bubbleReplyNameMe : styles.bubbleReplyNameFriend]}>
+                  {item.replyTo.senderId === currentUserId ? "You" : contactName}
+                </Text>
+                <Text style={[styles.bubbleReplyText, isMe ? styles.bubbleReplyTextMe : styles.bubbleReplyTextFriend]} numberOfLines={1}>
+                  {item.replyTo.text || "🎤 Voice message"}
+                </Text>
+              </View>
+            </Pressable>
+          )}
+          {item.images && item.images.length > 0 && (
+            <View style={styles.imageGrid}>
+              {item.images.map((url, idx) => (
+                <View key={idx} style={styles.messageImageWrapper}>
+                  <Image
+                    source={url}
+                    style={styles.messageImage}
+                    contentFit="cover"
+                    transition={null}
+                  />
+                  {item.status === "sending" && (
+                    <View style={styles.imageSendingOverlay}>
+                      <ActivityIndicator size="small" color={Colors.white} />
+                    </View>
+                  )}
+                </View>
+              ))}
+            </View>
+          )}
+          {item.audio ? (
+            <VoiceMessagePlayer
+              messageId={item.id}
+              url={item.audio.url}
+              duration={item.audio.duration}
+              waveform={item.audio.waveform}
+              isOwnMessage={isMe}
+            />
+          ) : item.text ? (
+            <Text style={[styles.messageText, isMe ? styles.messageTextMe : styles.messageTextFriend, { marginTop: item.images && item.images.length > 0 ? 8 : 0 }]}>
+              {item.text}
+            </Text>
+          ) : null}
+          <View style={styles.messageFooter}>
+            {item.isEdited && (
+              <Text style={[styles.messageEdited, isMe ? styles.messageEditedMe : styles.messageEditedFriend]}>
+                Edited
+              </Text>
+            )}
+            <Text style={[styles.messageTime, isMe ? styles.messageTimeMe : styles.messageTimeFriend]}>
+              {new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </Text>
+            {isMe && (
+              <Ionicons
+                name={item.isRead ? "checkmark-done" : "checkmark"}
+                size={14}
+                color={item.isRead ? "#4CAF50" : "#8E8E93"}
+                style={styles.messageCheckmarks}
+              />
+            )}
+          </View>
+        </Pressable>
+      </View>
+    </View>
+  );
+});
 
 export default function ChatScreen() {
   const router = useRouter();
@@ -368,135 +528,32 @@ export default function ChatScreen() {
     );
   };
 
-  const MessageItem = ({ item }: { item: Message }) => {
-    const viewRef = useRef<View>(null);
-    const isMe = item.senderId === user?.uid;
-    const isSelected = selectedMessageIds.has(item.id);
-    const isHighlighted = highlightedMessageId === item.id;
-    const highlightOpacity = useRef(new Animated.Value(0)).current;
 
-    useEffect(() => {
-      if (isHighlighted) {
-        highlightOpacity.setValue(0);
-        Animated.sequence([
-          Animated.timing(highlightOpacity, {
-            toValue: 1,
-            duration: 200,
-            useNativeDriver: true,
-          }),
-          Animated.timing(highlightOpacity, {
-            toValue: 0,
-            duration: 400,
-            delay: 400,
-            useNativeDriver: true,
-          }),
-        ]).start();
-      }
-    }, [isHighlighted, highlightOpacity]);
+  const handleMessagePress = useCallback((id: string) => {
+    toggleSelection(id);
+  }, [toggleSelection]);
 
-    const handlePress = () => {
-      if (isSelectionMode) {
-        toggleSelection(item.id);
-      }
-    };
+  const handleMessageLongPress = useCallback((item: Message, layout: { x: number; y: number; width: number; height: number }) => {
+    handleLongPressMessage(item, layout);
+  }, [handleLongPressMessage]);
 
-    const handleLongPress = () => {
-      if (isSelectionMode) return;
-      viewRef.current?.measure((x, y, width, height, pageX, pageY) => {
-        handleLongPressMessage(item, { x: pageX, y: pageY, width, height });
-      });
-    };
+  const handleScrollToReply = useCallback((id: string) => {
+    scrollToMessageId(id);
+  }, [scrollToMessageId]);
 
-    return (
-      <View style={styles.messageWrapper}>
-        {isSelectionMode && (
-          <Pressable onPress={handlePress} style={styles.selectionCheckbox}>
-            <Ionicons
-              name={isSelected ? "checkmark-circle" : "ellipse-outline"}
-              size={24}
-              color={isSelected ? Colors.primary : Colors.textMuted}
-            />
-          </Pressable>
-        )}
-        <View style={[styles.messageRow, isMe ? styles.messageRowMe : styles.messageRowFriend]}>
-          <Pressable
-            ref={viewRef}
-            onPress={handlePress}
-            onLongPress={handleLongPress}
-            delayLongPress={250}
-            style={[styles.messageBubble, isMe ? styles.messageBubbleMe : styles.messageBubbleFriend]}
-          >
-            <Animated.View 
-              pointerEvents="none"
-              style={[
-                StyleSheet.absoluteFill,
-                {
-                   backgroundColor: "rgba(0,0,0,0.15)",
-                   opacity: highlightOpacity,
-                   borderRadius: 20,
-                   borderBottomLeftRadius: isMe ? 20 : 4,
-                   borderBottomRightRadius: isMe ? 4 : 20,
-                   zIndex: 10,
-                }
-              ]}
-            />
-            {item.isForwarded && (
-              <Text style={[styles.forwardedText, isMe ? styles.forwardedTextMe : styles.forwardedTextFriend]}>
-                Forwarded message
-              </Text>
-            )}
-            {item.replyTo && (
-              <Pressable 
-                style={[styles.bubbleReplyContainer, isMe ? styles.bubbleReplyContainerMe : styles.bubbleReplyContainerFriend]}
-                onPress={() => scrollToMessageId(item.replyTo!.id)}
-              >
-                <View style={[styles.bubbleReplyLine, isMe ? styles.bubbleReplyLineMe : styles.bubbleReplyLineFriend]} />
-                <View style={styles.bubbleReplyContent}>
-                  <Text style={[styles.bubbleReplyName, isMe ? styles.bubbleReplyNameMe : styles.bubbleReplyNameFriend]}>
-                    {item.replyTo.senderId === user?.uid ? "You" : name}
-                  </Text>
-                  <Text style={[styles.bubbleReplyText, isMe ? styles.bubbleReplyTextMe : styles.bubbleReplyTextFriend]} numberOfLines={1}>
-                    {item.replyTo.text || "🎤 Voice message"}
-                  </Text>
-                </View>
-              </Pressable>
-            )}
-            {item.audio ? (
-              <VoiceMessagePlayer
-                messageId={item.id}
-                url={item.audio.url}
-                duration={item.audio.duration}
-                waveform={item.audio.waveform}
-                isOwnMessage={isMe}
-              />
-            ) : (
-              <Text style={[styles.messageText, isMe ? styles.messageTextMe : styles.messageTextFriend]}>
-                {item.text}
-              </Text>
-            )}
-            <View style={styles.messageFooter}>
-              {item.isEdited && (
-                <Text style={[styles.messageEdited, isMe ? styles.messageEditedMe : styles.messageEditedFriend]}>
-                  Edited
-                </Text>
-              )}
-              <Text style={[styles.messageTime, isMe ? styles.messageTimeMe : styles.messageTimeFriend]}>
-                {formatTime(item.createdAt)}
-              </Text>
-              {isMe && (
-                <Ionicons
-                  name={item.isRead ? "checkmark-done" : "checkmark"}
-                  size={14}
-                  color={item.isRead ? "#4CAF50" : "#8E8E93"}
-                  style={styles.messageCheckmarks}
-                />
-              )}
-            </View>
-          </Pressable>
-        </View>
-      </View>
-    );
-  };
+  const renderItem = useCallback(({ item }: { item: Message }) => (
+    <MessageItem
+      item={item}
+      currentUserId={user?.uid}
+      contactName={name}
+      isSelectionMode={isSelectionMode}
+      isSelected={selectedMessageIds.has(item.id)}
+      isHighlighted={highlightedMessageId === item.id}
+      onPress={handleMessagePress}
+      onLongPress={handleMessageLongPress}
+      onScrollToReply={handleScrollToReply}
+    />
+  ), [user?.uid, name, isSelectionMode, selectedMessageIds, highlightedMessageId, handleMessagePress, handleMessageLongPress, handleScrollToReply]);
 
   return (
     <LinearGradient
@@ -533,8 +590,12 @@ export default function ChatScreen() {
           }}
           data={messages}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <MessageItem item={item} />}
+          renderItem={renderItem}
           showsVerticalScrollIndicator={false}
+          initialNumToRender={15}
+          maxToRenderPerBatch={10}
+          windowSize={10}
+          removeClippedSubviews={Platform.OS === 'android'}
         />
 
         {isSelectionMode ? (
@@ -635,6 +696,9 @@ export default function ChatScreen() {
               onSendText={handleSend}
               onSendAudio={(audioInfo) => {
                 sendMessage("", undefined, audioInfo).catch(console.error);
+              }}
+              onSendMedia={(uris) => {
+                sendMessage("", undefined, undefined, uris).catch(console.error);
               }}
               replyingToMessage={replyingToMessage}
               editingMessage={editingMessage}
@@ -1325,7 +1389,29 @@ const styles = StyleSheet.create({
   },
   toastText: {
     color: Colors.white,
-    fontSize: FontSizes.sm,
-    fontWeight: "bold",
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  imageGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 4,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  messageImage: {
+    width: 200,
+    height: 200,
+    borderRadius: 12,
+  },
+  messageImageWrapper: {
+    position: "relative",
+  },
+  imageSendingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
   },
 });

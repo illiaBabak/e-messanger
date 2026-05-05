@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import React, { useEffect, useRef, useState } from "react";
 import { Alert, Animated, PanResponder, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { AttachmentModal } from "./AttachmentModal";
 
 type AudioInfo = { uri: string; duration: number; waveform: number[] };
 
@@ -12,6 +13,7 @@ type ChatInputProps = {
   setMessageText: (text: string) => void;
   onSendText: () => void;
   onSendAudio: (info: AudioInfo) => void;
+  onSendMedia?: (uris: string[]) => void;
   replyingToMessage: Message | null;
   editingMessage: Message | null;
   onCancelReplyOrEdit: () => void;
@@ -31,7 +33,9 @@ export const ChatInput = ({
   name,
   currentUserId,
   textInputRef,
+  onSendMedia,
 }: ChatInputProps) => {
+  const [isAttachmentModalVisible, setIsAttachmentModalVisible] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   const state = useAudioRecorderState(recorder, 100);
@@ -176,7 +180,10 @@ export const ChatInput = ({
         </View>
       ) : (
         <>
-          <Pressable style={[styles.floatingCircle, {backgroundColor: Colors.background}]}>
+          <Pressable 
+            style={[styles.floatingCircle, {backgroundColor: Colors.background}]}
+            onPress={() => setIsAttachmentModalVisible(true)}
+          >
             <Ionicons name="attach" size={24} color={Colors.textSecondary} />
           </Pressable>
 
@@ -231,6 +238,17 @@ export const ChatInput = ({
           />
         </Animated.View>
       )}
+
+      <AttachmentModal
+        visible={isAttachmentModalVisible}
+        onClose={() => setIsAttachmentModalVisible(false)}
+        contactName={name}
+        onSendMedia={(uris) => {
+          if (onSendMedia) {
+            onSendMedia(uris);
+          }
+        }}
+      />
     </View>
   );
 };

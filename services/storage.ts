@@ -55,3 +55,26 @@ export async function uploadVoiceMessage(
     throw new StorageError("Failed to upload voice message", "storage/upload-failed");
   }
 }
+
+export async function uploadImageMessage(
+  uri: string,
+  chatId: string,
+  messageId: string,
+  index: number
+): Promise<string> {
+  try {
+    const cleanUri = uri.replace("file://", "");
+    const extension = cleanUri.split(".").pop() || "jpg";
+
+    const filename = `chats/${chatId}/images/${messageId}_${index}.${extension}`;
+    const storageRef = ref(storage, filename);
+
+    await putFile(storageRef, cleanUri);
+    const downloadURL = await getDownloadURL(storageRef);
+
+    return downloadURL;
+  } catch (error) {
+    console.error("[Storage] uploadImageMessage error", error);
+    throw new StorageError("Failed to upload image message", "storage/upload-failed");
+  }
+}

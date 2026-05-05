@@ -3,20 +3,20 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   increment,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
-  writeBatch,
-  getDoc,
-  Timestamp
+  writeBatch
 } from "@react-native-firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { firestore } from "../services/firebase";
-import { uploadVoiceMessage } from "../services/storage";
+import { uploadImageMessage, uploadVoiceMessage } from "../services/storage";
 
 export type ReplyToSnippet = {
   id: string;
@@ -45,10 +45,13 @@ export type Message = {
     duration: number;
     waveform: number[];
   };
+  images?: string[];
+  status?: "sending" | "sent" | "error";
 };
 
 export function useMessages(currentUserId: string | undefined | null, contactId: string | undefined) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [pendingMessages, setPendingMessages] = useState<Message[]>([]);
   const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([]);
   const [isFriendTyping, setIsFriendTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -101,6 +104,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
             isForwarded: data.isForwarded,
             isEdited: data.isEdited,
             audio: data.audio,
+            images: data.images,
           });
 
           if (data.senderId !== currentUserId && !data.isRead) {
@@ -181,21 +185,52 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
     }
   };
 
-  const sendMessage = async (
+  const _sendMessage = async (
     text: string, 
     replyTo?: ReplyToSnippet,
-    audioInfo?: { uri: string; duration: number; waveform: number[] }
+    audioInfo?: { uri: string; duration: number; waveform: number[] },
+    imagesUris?: string[]
   ) => {
     if (!chatId || !currentUserId || !contactId) return;
-    if (!text.trim() && !audioInfo) return;
+    if (!text.trim() && !audioInfo && (!imagesUris || imagesUris.length === 0)) return;
+
+    const newMessageRef = doc(collection(firestore, "chats", chatId, "messages"));
+    const isMedia = !!audioInfo || (imagesUris && imagesUris.length > 0);
+    
+    if (isMedia) {
+      const pendingMessage: Message = {
+        id: newMessageRef.id,
+        text: text.trim(),
+        senderId: currentUserId,
+        createdAt: Date.now(),
+        isRead: true,
+        status: "sending",
+        ...(replyTo && { replyTo }),
+        ...(imagesUris && imagesUris.length > 0 && { images: imagesUris }),
+        ...(audioInfo && {
+          audio: {
+            url: audioInfo.uri, // use local uri
+            duration: audioInfo.duration,
+            waveform: audioInfo.waveform,
+          }
+        }),
+      };
+      setPendingMessages(prev => [...prev, pendingMessage]);
+    }
 
     try {
       const batch = writeBatch(firestore);
-      const newMessageRef = doc(collection(firestore, "chats", chatId, "messages"));
       
       let audioUrl;
       if (audioInfo) {
         audioUrl = await uploadVoiceMessage(audioInfo.uri, chatId, newMessageRef.id);
+      }
+
+      let imageUrls: string[] = [];
+      if (imagesUris && imagesUris.length > 0) {
+        imageUrls = await Promise.all(
+          imagesUris.map((uri, index) => uploadImageMessage(uri, chatId, newMessageRef.id, index))
+        );
       }
 
       const messageData = {
@@ -210,7 +245,8 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
             duration: audioInfo.duration,
             waveform: audioInfo.waveform,
           }
-        })
+        }),
+        ...(imageUrls.length > 0 && { images: imageUrls }),
       };
 
       batch.set(newMessageRef, messageData);
@@ -222,7 +258,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         {
           participants: [currentUserId, contactId],
           lastMessage: {
-            text: audioInfo ? "🎤 Voice message" : text.trim(),
+            text: audioInfo ? "🎤 Voice message" : (imageUrls.length > 0 ? "📷 Photo message" : text.trim()),
             senderId: currentUserId,
             createdAt: serverTimestamp(),
           },
@@ -238,7 +274,31 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
     } catch (error) {
       console.error("Error sending message:", error);
       throw error;
+    } finally {
+      if (isMedia) {
+        setPendingMessages(prev => prev.filter(m => m.id !== newMessageRef.id));
+      }
     }
+  };
+
+  const sendMessage = async (
+    text: string, 
+    replyTo?: ReplyToSnippet,
+    audioInfo?: { uri: string; duration: number; waveform: number[] },
+    imagesUris?: string[]
+  ) => {
+    if (!chatId || !currentUserId || !contactId) return;
+
+    if (imagesUris && imagesUris.length > 0) {
+      const promises = imagesUris.map((uri, index) => {
+        const msgText = index === 0 ? text : "";
+        return _sendMessage(msgText, replyTo, undefined, [uri]);
+      });
+      await Promise.all(promises);
+      return;
+    }
+
+    return _sendMessage(text, replyTo, audioInfo, undefined);
   };
 
   const deleteMessage = async (messageId: string, type: "me" | "everyone") => {
@@ -380,8 +440,18 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
     }
   };
 
+  const combinedMessages = useMemo(() => {
+    const combined = [...messages];
+    pendingMessages.forEach(pm => {
+      if (!combined.some(m => m.id === pm.id)) {
+        combined.push(pm);
+      }
+    });
+    return combined.sort((a, b) => a.createdAt - b.createdAt);
+  }, [messages, pendingMessages]);
+
   return { 
-    messages, 
+    messages: combinedMessages, 
     pinnedMessages,
     isFriendTyping,
     isLoading, 

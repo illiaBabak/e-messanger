@@ -23,6 +23,7 @@ export const Colors = {
 
   overlay: 'rgba(0, 0, 0, 0.3)',
   transparent: 'transparent',
+  
 };
 
 export const Spacing = {
