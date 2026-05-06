@@ -70,6 +70,7 @@ export const AttachmentModal = ({
 }: AttachmentModalProps) => {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<TabType>("Gallery");
+  const [internalVisible, setInternalVisible] = useState(visible);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [assets, setAssets] = useState<MediaLibrary.Asset[]>([]);
   const [selectedUris, setSelectedUris] = useState<Set<string>>(new Set());
@@ -250,6 +251,7 @@ export const AttachmentModal = ({
 
   useEffect(() => {
     if (visible) {
+      setInternalVisible(true);
       Animated.parallel([
         Animated.timing(overlayOpacity, {
           toValue: 1,
@@ -267,7 +269,7 @@ export const AttachmentModal = ({
       if (activeTab === "Gallery" && hasPermission === null) {
         requestMediaPermissions();
       }
-    } else {
+    } else if (internalVisible) {
       Animated.parallel([
         Animated.timing(overlayOpacity, {
           toValue: 0,
@@ -285,9 +287,10 @@ export const AttachmentModal = ({
         setPreviewAsset(null);
         resetEditorState();
         dragY.setValue(0);
+        setInternalVisible(false);
       });
     }
-  }, [visible]);
+  }, [visible, internalVisible]);
 
   const requestMediaPermissions = async () => {
     const { status } = await MediaLibrary.requestPermissionsAsync();
@@ -327,8 +330,14 @@ export const AttachmentModal = ({
   useEffect(() => {
     if (hasPermission) {
       fetchPhotos(selectedAlbum);
+      const subscription = MediaLibrary.addListener(() => {
+        fetchPhotos(selectedAlbum);
+      });
+      return () => {
+        subscription.remove();
+      };
     }
-  }, [selectedAlbum]);
+  }, [hasPermission, selectedAlbum]);
 
   const fetchMorePhotos = async () => {
     if (isLoadingMore || !hasNextPage || !endCursor) return;
@@ -453,9 +462,8 @@ export const AttachmentModal = ({
         )
       : [...Array.from(selectedUris), currentUri];
     onSendMedia(urisToSend);
-    resetEditorState();
     onClose();
-  }, [previewAsset, workingUri, selectedUris, hasEdits, exportEditedImage, onSendMedia, onClose, resetEditorState]);
+  }, [previewAsset, workingUri, selectedUris, hasEdits, exportEditedImage, onSendMedia, onClose]);
 
 
 
@@ -737,12 +745,12 @@ export const AttachmentModal = ({
     </View>
   );
 
-  if (!visible) return null;
+  if (!internalVisible) return null;
 
   const isPreviewSelected = previewAsset ? selectedUris.has(previewAsset.uri) : false;
 
   return (
-    <Modal visible={visible} transparent animationType="none">
+    <Modal visible={internalVisible} transparent animationType="none">
       <View style={styles.container}>
         {/* Dim overlay — tap to close bottom sheet */}
         <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]}>

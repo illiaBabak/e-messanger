@@ -1,5 +1,5 @@
 import { Colors } from "@/constants/theme";
-import { Message } from "@/hooks/useMessages";
+import { Message, getMessagePreviewText } from "@/hooks/useMessages";
 import { Ionicons } from "@expo/vector-icons";
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import React, { useEffect, useRef, useState } from "react";
@@ -196,7 +196,7 @@ export const ChatInput = ({
                     {editingMessage ? "Edit Message" : (replyingToMessage?.senderId === currentUserId ? "You" : name)}
                   </Text>
                   <Text style={styles.replyPreviewText} numberOfLines={1}>
-                    {editingMessage ? editingMessage.text : (replyingToMessage?.audio ? "🎤 Voice message" : replyingToMessage?.text)}
+                    {editingMessage ? editingMessage.text : (replyingToMessage ? getMessagePreviewText(replyingToMessage) : "")}
                   </Text>
                 </View>
                 <Pressable onPress={onCancelReplyOrEdit} style={styles.replyPreviewClose}>

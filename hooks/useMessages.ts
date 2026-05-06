@@ -49,6 +49,16 @@ export type Message = {
   status?: "sending" | "sent" | "error";
 };
 
+export function getMessagePreviewText(message: Message | PinnedMessage | ReplyToSnippet | { text?: string; audio?: unknown; images?: unknown }): string {
+  if ('images' in message && message.images) {
+    return "📷 Image";
+  }
+  if ('audio' in message && message.audio) {
+    return "🎤 Voice message";
+  }
+  return message.text || "";
+}
+
 export function useMessages(currentUserId: string | undefined | null, contactId: string | undefined) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [pendingMessages, setPendingMessages] = useState<Message[]>([]);
@@ -258,7 +268,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         {
           participants: [currentUserId, contactId],
           lastMessage: {
-            text: audioInfo ? "🎤 Voice message" : (imageUrls.length > 0 ? "📷 Photo message" : text.trim()),
+            text: getMessagePreviewText({ text: text.trim(), audio: audioInfo, images: imageUrls }),
             senderId: currentUserId,
             createdAt: serverTimestamp(),
           },
@@ -392,13 +402,24 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
       
       messagesToForward.forEach((msg, index) => {
         const newMessageRef = doc(collection(firestore, "chats", targetChatId, "messages"));
-        batch.set(newMessageRef, {
-          text: msg.text,
+        
+        const messageData: Record<string, unknown> = {
+          text: msg.text || "",
           senderId: currentUserId,
           createdAt: Timestamp.fromMillis(Date.now() + index),
           isRead: false,
           isForwarded: true,
-        });
+        };
+
+        if (msg.images) {
+          messageData.images = msg.images;
+        }
+
+        if (msg.audio) {
+          messageData.audio = msg.audio;
+        }
+
+        batch.set(newMessageRef, messageData);
       });
       
       const chatRef = doc(firestore, "chats", targetChatId);
@@ -407,7 +428,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         {
           participants: [currentUserId, targetContactId],
           lastMessage: {
-            text: messagesToForward[messagesToForward.length - 1].text,
+            text: getMessagePreviewText(messagesToForward[messagesToForward.length - 1]),
             senderId: currentUserId,
             createdAt: serverTimestamp(),
           },

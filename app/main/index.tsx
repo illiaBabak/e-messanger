@@ -5,12 +5,25 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Colors, FontSizes, Spacing } from "@/constants/theme";
 import { ChatListItem, useChatsList } from "@/hooks/useChatsList";
+import { useContacts } from "@/hooks/useContacts";
 import { useAuth } from "@/providers/AuthProvider";
+import { useMemo } from "react";
 
 export default function ChatsScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { chats, isLoading } = useChatsList(user?.uid);
+  const { contacts } = useContacts(user?.uid);
+
+  const displayChats = useMemo(() => {
+    return chats.map((chat) => {
+      const contact = contacts.find((c) => c.id === chat.friendId);
+      return {
+        ...chat,
+        name: contact ? contact.name : chat.name,
+      };
+    });
+  }, [chats, contacts]);
 
   const formatChatTime = (ms: number) => {
     const date = new Date(ms);
@@ -90,17 +103,17 @@ export default function ChatsScreen() {
       <View style={styles.container}>
         <Text style={styles.title}>Chats</Text>
         
-        {isLoading && chats.length === 0 ? (
+        {isLoading && displayChats.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyText}>Loading chats...</Text>
           </View>
-        ) : chats.length === 0 ? (
+        ) : displayChats.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyText}>No active chats yet.</Text>
           </View>
         ) : (
           <FlatList
-            data={chats}
+            data={displayChats}
             keyExtractor={(item) => item.id}
             renderItem={renderItem}
             showsVerticalScrollIndicator={false}

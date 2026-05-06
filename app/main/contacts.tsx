@@ -409,6 +409,7 @@ export default function ContactsScreen() {
 
               {addMethod === "phone" ? (
                 <TextInput
+                  key="phone-input"
                   placeholder="Phone number (e.g. +1...)"
                   keyboardType="phone-pad"
                   value={newContactPhone}
@@ -416,6 +417,7 @@ export default function ContactsScreen() {
                 />
               ) : (
                 <TextInput
+                  key="login-input"
                   placeholder="Unique login"
                   autoCapitalize="none"
                   autoCorrect={false}

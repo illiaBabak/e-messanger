@@ -1,8 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import * as Clipboard from "expo-clipboard";
+import * as FileSystem from "expo-file-system";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
+import * as MediaLibrary from "expo-media-library";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -24,11 +26,13 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ChatInput } from "@/components/chat/ChatInput";
+import { ImageMessage } from "@/components/chat/ImageMessage";
+import { ImagePreviewModal } from "@/components/chat/ImagePreviewModal";
 import { VoiceMessagePlayer } from "@/components/chat/VoiceMessagePlayer";
 import { Colors, FontSizes, Spacing } from "@/constants/theme";
 import { useChatsList } from "@/hooks/useChatsList";
 import { useContacts } from "@/hooks/useContacts";
-import { Message, useMessages } from "@/hooks/useMessages";
+import { getMessagePreviewText, Message, useMessages } from "@/hooks/useMessages";
 import { useAuth } from "@/providers/AuthProvider";
 
 type MessageItemProps = {
@@ -39,11 +43,12 @@ type MessageItemProps = {
   isSelected: boolean;
   isHighlighted: boolean;
   onPress: (id: string) => void;
+  onImagePress: (url: string, contactName: string, timeStr: string, message: Message) => void;
   onLongPress: (item: Message, layout: { x: number; y: number; width: number; height: number }) => void;
   onScrollToReply: (id: string) => void;
 };
 
-const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, isSelected, isHighlighted, onPress, onLongPress, onScrollToReply }: MessageItemProps) => {
+const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, isSelected, isHighlighted, onPress, onImagePress, onLongPress, onScrollToReply }: MessageItemProps) => {
   const viewRef = useRef<View>(null);
   const isMe = item.senderId === currentUserId;
   const highlightOpacity = useRef(new Animated.Value(0)).current;
@@ -73,12 +78,49 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
     }
   };
 
+  const handleImagePress = () => {
+    if (isSelectionMode) {
+      onPress(item.id);
+    } else if (item.images && item.images.length > 0) {
+      onImagePress(item.images[0], contactName, new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), item);
+    }
+  };
+
   const handleLongPress = () => {
     if (isSelectionMode) return;
     viewRef.current?.measure((x, y, width, height, pageX, pageY) => {
       onLongPress(item, { x: pageX, y: pageY, width, height });
     });
   };
+
+  const isOnlyImage = item.images && item.images.length > 0 && !item.text && !item.audio && !item.replyTo && !item.isForwarded;
+
+  if (isOnlyImage) {
+    return (
+      <View style={styles.messageWrapper}>
+        {isSelectionMode && (
+          <Pressable onPress={handlePress} style={styles.selectionCheckbox}>
+            <Ionicons
+              name={isSelected ? "checkmark-circle" : "ellipse-outline"}
+              size={24}
+              color={isSelected ? Colors.primary : Colors.textMuted}
+            />
+          </Pressable>
+        )}
+        <View style={[styles.messageRow, isMe ? styles.messageRowMe : styles.messageRowFriend]}>
+           <ImageMessage
+              url={item.images![0]}
+              isMe={isMe}
+              timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              status={item.status as any}
+              isRead={item.isRead}
+              onPress={handleImagePress}
+              onLongPress={(layout) => onLongPress(item, layout)}
+           />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.messageWrapper}>
@@ -129,7 +171,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
                   {item.replyTo.senderId === currentUserId ? "You" : contactName}
                 </Text>
                 <Text style={[styles.bubbleReplyText, isMe ? styles.bubbleReplyTextMe : styles.bubbleReplyTextFriend]} numberOfLines={1}>
-                  {item.replyTo.text || "🎤 Voice message"}
+                  {getMessagePreviewText(item.replyTo)}
                 </Text>
               </View>
             </Pressable>
@@ -137,7 +179,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
           {item.images && item.images.length > 0 && (
             <View style={styles.imageGrid}>
               {item.images.map((url, idx) => (
-                <View key={idx} style={styles.messageImageWrapper}>
+                <Pressable key={idx} style={styles.messageImageWrapper} onPress={handleImagePress}>
                   <Image
                     source={url}
                     style={styles.messageImage}
@@ -149,7 +191,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
                       <ActivityIndicator size="small" color={Colors.white} />
                     </View>
                   )}
-                </View>
+                </Pressable>
               ))}
             </View>
           )}
@@ -284,6 +326,26 @@ export default function ChatScreen() {
     return Array.from(map.values());
   }, [contacts, chats]);
 
+  // Image Preview State
+  const [previewImage, setPreviewImage] = useState<{ url: string, name: string, time: string, message: Message } | null>(null);
+
+  const handleDownloadImage = async (url: string) => {
+    try {
+      let fileUri = url;
+      if (url.startsWith('http')) {
+        const downloadFile = new FileSystem.File(FileSystem.Paths.cache, `downloaded_img_${Date.now()}.jpg`);
+        const file = await FileSystem.File.downloadFileAsync(url, downloadFile);
+        fileUri = file.uri;
+      }
+      await MediaLibrary.createAssetAsync(fileUri);
+      showToast("Image saved to gallery");
+      closeMenu();
+    } catch (error) {
+      Alert.alert("Error", "Could not download image");
+      closeMenu();
+    }
+  };
+
   // Toast State
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastOpacity = useRef(new Animated.Value(0)).current;
@@ -329,7 +391,7 @@ export default function ChatScreen() {
 
       setMessageText("");
       const replySnippet = replyingToMessage 
-        ? { id: replyingToMessage.id, text: replyingToMessage.audio ? "🎤 Voice message" : replyingToMessage.text, senderId: replyingToMessage.senderId }
+        ? { id: replyingToMessage.id, text: getMessagePreviewText(replyingToMessage), senderId: replyingToMessage.senderId }
         : undefined;
       
       setReplyingToMessage(null);
@@ -348,6 +410,8 @@ export default function ChatScreen() {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
+  const menuAnimY = useRef(new Animated.Value(0)).current;
+
   const handleLongPressMessage = (item: Message, layout: { x: number; y: number; width: number; height: number }) => {
     const { height: screenHeight } = Dimensions.get("window");
     const menuHeight = 350; // approximate menu height
@@ -361,8 +425,16 @@ export default function ChatScreen() {
     }
 
     setSelectedMessage(item);
-    setMessageLayout({ ...layout, y: adjustedY });
+    setMessageLayout({ ...layout, y: layout.y }); // Keep original Y in layout
     setMenuVisible(true);
+
+    menuAnimY.setValue(layout.y);
+    Animated.spring(menuAnimY, {
+      toValue: adjustedY,
+      useNativeDriver: false,
+      bounciness: 4,
+      speed: 12,
+    }).start();
   };
 
   const closeMenu = () => {
@@ -379,9 +451,10 @@ export default function ChatScreen() {
     }
   };
 
-  const handleDelete = () => {
-    if (!selectedMessage) return;
-    const isMe = selectedMessage.senderId === user?.uid;
+  const handleDelete = (msgToDel?: Message) => {
+    const msg = msgToDel || selectedMessage;
+    if (!msg) return;
+    const isMe = msg.senderId === user?.uid;
 
     Alert.alert(
       "Delete Message",
@@ -392,7 +465,7 @@ export default function ChatScreen() {
           text: "Delete for me",
           style: "destructive",
           onPress: () => {
-            deleteMessage(selectedMessage.id, "me");
+            deleteMessage(msg.id, "me");
             closeMenu();
           },
         },
@@ -402,7 +475,7 @@ export default function ChatScreen() {
                 text: "Delete for everyone",
                 style: "destructive" as const,
                 onPress: () => {
-                  deleteMessage(selectedMessage.id, "everyone");
+                  deleteMessage(msg.id, "everyone");
                   closeMenu();
                 },
               },
@@ -435,9 +508,10 @@ export default function ChatScreen() {
     }
   };
 
-  const handleReplyAction = () => {
-    if (selectedMessage) {
-      setReplyingToMessage(selectedMessage);
+  const handleReplyAction = (msgToReply?: Message) => {
+    const msg = msgToReply || selectedMessage;
+    if (msg) {
+      setReplyingToMessage(msg);
       closeMenu();
       setTimeout(() => textInputRef.current?.focus(), 100);
     }
@@ -456,16 +530,17 @@ export default function ChatScreen() {
     if (selectedMessage) {
       togglePinMessage({
         id: selectedMessage.id,
-        text: selectedMessage.audio ? "🎤 Voice message" : selectedMessage.text,
+        text: getMessagePreviewText(selectedMessage),
         senderId: selectedMessage.senderId,
       });
       closeMenu();
     }
   };
 
-  const handleForwardContextAction = () => {
-    if (selectedMessage) {
-      setSelectedMessageIds(new Set([selectedMessage.id]));
+  const handleForwardContextAction = (msgToForward?: Message) => {
+    const msg = msgToForward || selectedMessage;
+    if (msg) {
+      setSelectedMessageIds(new Set([msg.id]));
       setForwardModalVisible(true);
       closeMenu();
     }
@@ -537,6 +612,10 @@ export default function ChatScreen() {
     handleLongPressMessage(item, layout);
   }, [handleLongPressMessage]);
 
+  const handleImagePress = useCallback((url: string, contactName: string, timeStr: string, message: Message) => {
+    setPreviewImage({ url, name: contactName, time: timeStr, message });
+  }, []);
+
   const handleScrollToReply = useCallback((id: string) => {
     scrollToMessageId(id);
   }, [scrollToMessageId]);
@@ -550,10 +629,11 @@ export default function ChatScreen() {
       isSelected={selectedMessageIds.has(item.id)}
       isHighlighted={highlightedMessageId === item.id}
       onPress={handleMessagePress}
+      onImagePress={handleImagePress}
       onLongPress={handleMessageLongPress}
       onScrollToReply={handleScrollToReply}
     />
-  ), [user?.uid, name, isSelectionMode, selectedMessageIds, highlightedMessageId, handleMessagePress, handleMessageLongPress, handleScrollToReply]);
+  ), [user?.uid, name, isSelectionMode, selectedMessageIds, highlightedMessageId, handleMessagePress, handleImagePress, handleMessageLongPress, handleScrollToReply]);
 
   return (
     <LinearGradient
@@ -666,7 +746,7 @@ export default function ChatScreen() {
                 Pinned Message {pinnedMessages.length > 1 ? `(${activePinnedIndex % pinnedMessages.length + 1}/${pinnedMessages.length})` : ''}
               </Text>
               <Text style={styles.pinnedMessageText} numberOfLines={1}>
-                {activePinnedMessage.text || "🎤 Voice message"}
+                {getMessagePreviewText(activePinnedMessage)}
               </Text>
             </View>
             <Pressable onPress={() => togglePinMessage(activePinnedMessage)} style={styles.pinnedMessageClose}>
@@ -729,88 +809,102 @@ export default function ChatScreen() {
         <Pressable style={styles.modalOverlay} onPress={closeMenu}>
           <BlurView intensity={50} tint="dark" style={StyleSheet.absoluteFill} />
           {selectedMessage && messageLayout && (
-            <View
+            <Animated.View
               style={{
                 position: "absolute",
-                top: messageLayout.y,
+                top: menuAnimY,
                 left: messageLayout.x,
                 width: messageLayout.width,
                 height: messageLayout.height,
               }}
             >
-              <View
-                style={[
-                  styles.messageBubble,
-                  selectedMessage.senderId === user?.uid
-                    ? styles.messageBubbleMe
-                    : styles.messageBubbleFriend,
-                  { maxWidth: "100%", width: "100%" } // Ensure it exactly matches the measured width
-                ]}
-              >
-                {selectedMessage.isForwarded && (
-                  <Text style={[styles.forwardedText, selectedMessage.senderId === user?.uid ? styles.forwardedTextMe : styles.forwardedTextFriend]}>
-                    Forwarded message
-                  </Text>
-                )}
-                {selectedMessage.replyTo && (
-                  <View style={[styles.bubbleReplyContainer, selectedMessage.senderId === user?.uid ? styles.bubbleReplyContainerMe : styles.bubbleReplyContainerFriend]}>
-                    <View style={[styles.bubbleReplyLine, selectedMessage.senderId === user?.uid ? styles.bubbleReplyLineMe : styles.bubbleReplyLineFriend]} />
-                    <View style={styles.bubbleReplyContent}>
-                      <Text style={[styles.bubbleReplyName, selectedMessage.senderId === user?.uid ? styles.bubbleReplyNameMe : styles.bubbleReplyNameFriend]}>
-                        {selectedMessage.replyTo.senderId === user?.uid ? "You" : name}
-                      </Text>
-                      <Text style={[styles.bubbleReplyText, selectedMessage.senderId === user?.uid ? styles.bubbleReplyTextMe : styles.bubbleReplyTextFriend]} numberOfLines={1}>
-                        {selectedMessage.replyTo.text || "🎤 Voice message"}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-                {selectedMessage.audio ? (
-                  <VoiceMessagePlayer
-                    messageId={selectedMessage.id}
-                    url={selectedMessage.audio.url}
-                    duration={selectedMessage.audio.duration}
-                    waveform={selectedMessage.audio.waveform}
-                    isOwnMessage={selectedMessage.senderId === user?.uid}
+              {selectedMessage.images && selectedMessage.images.length > 0 ? (
+                <View pointerEvents="none">
+                  <ImageMessage
+                    url={selectedMessage.images[0]}
+                    isMe={selectedMessage.senderId === user?.uid}
+                    timeStr={formatTime(selectedMessage.createdAt)}
+                    status={selectedMessage.status as "sending" | "sent" | "error" | "read" | undefined}
+                    isRead={selectedMessage.isRead}
+                    onPress={() => {}}
+                    onLongPress={() => {}}
                   />
-                ) : (
-                  <Text
-                    style={[
-                      styles.messageText,
-                      selectedMessage.senderId === user?.uid
-                        ? styles.messageTextMe
-                        : styles.messageTextFriend,
-                    ]}
-                  >
-                    {selectedMessage.text}
-                  </Text>
-                )}
-                <View style={styles.messageFooter}>
-                  {selectedMessage.isEdited && (
-                    <Text style={[styles.messageEdited, selectedMessage.senderId === user?.uid ? styles.messageEditedMe : styles.messageEditedFriend]}>
-                      Edited
+                </View>
+              ) : (
+                <View
+                  style={[
+                    styles.messageBubble,
+                    selectedMessage.senderId === user?.uid
+                      ? styles.messageBubbleMe
+                      : styles.messageBubbleFriend,
+                    { maxWidth: "100%", width: "100%" } // Ensure it exactly matches the measured width
+                  ]}
+                >
+                  {selectedMessage.isForwarded && (
+                    <Text style={[styles.forwardedText, selectedMessage.senderId === user?.uid ? styles.forwardedTextMe : styles.forwardedTextFriend]}>
+                      Forwarded message
                     </Text>
                   )}
-                  <Text
-                    style={[
-                      styles.messageTime,
-                      selectedMessage.senderId === user?.uid
-                        ? styles.messageTimeMe
-                        : styles.messageTimeFriend,
-                    ]}
-                  >
-                    {formatTime(selectedMessage.createdAt)}
-                  </Text>
-                  {selectedMessage.senderId === user?.uid && (
-                    <Ionicons
-                      name={selectedMessage.isRead ? "checkmark-done" : "checkmark"}
-                      size={14}
-                      color={selectedMessage.isRead ? "#4CAF50" : "#8E8E93"}
-                      style={styles.messageCheckmarks}
-                    />
+                  {selectedMessage.replyTo && (
+                    <View style={[styles.bubbleReplyContainer, selectedMessage.senderId === user?.uid ? styles.bubbleReplyContainerMe : styles.bubbleReplyContainerFriend]}>
+                      <View style={[styles.bubbleReplyLine, selectedMessage.senderId === user?.uid ? styles.bubbleReplyLineMe : styles.bubbleReplyLineFriend]} />
+                      <View style={styles.bubbleReplyContent}>
+                        <Text style={[styles.bubbleReplyName, selectedMessage.senderId === user?.uid ? styles.bubbleReplyNameMe : styles.bubbleReplyNameFriend]}>
+                          {selectedMessage.replyTo.senderId === user?.uid ? "You" : name}
+                        </Text>
+                        <Text style={[styles.bubbleReplyText, selectedMessage.senderId === user?.uid ? styles.bubbleReplyTextMe : styles.bubbleReplyTextFriend]} numberOfLines={1}>
+                          {getMessagePreviewText(selectedMessage.replyTo)}
+                        </Text>
+                      </View>
+                    </View>
                   )}
+                  {selectedMessage.audio ? (
+                    <VoiceMessagePlayer
+                      messageId={selectedMessage.id}
+                      url={selectedMessage.audio.url}
+                      duration={selectedMessage.audio.duration}
+                      waveform={selectedMessage.audio.waveform}
+                      isOwnMessage={selectedMessage.senderId === user?.uid}
+                    />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.messageText,
+                        selectedMessage.senderId === user?.uid
+                          ? styles.messageTextMe
+                          : styles.messageTextFriend,
+                      ]}
+                    >
+                      {getMessagePreviewText(selectedMessage)}
+                    </Text>
+                  )}
+                  <View style={styles.messageFooter}>
+                    {selectedMessage.isEdited && (
+                      <Text style={[styles.messageEdited, selectedMessage.senderId === user?.uid ? styles.messageEditedMe : styles.messageEditedFriend]}>
+                        Edited
+                      </Text>
+                    )}
+                    <Text
+                      style={[
+                        styles.messageTime,
+                        selectedMessage.senderId === user?.uid
+                          ? styles.messageTimeMe
+                          : styles.messageTimeFriend,
+                      ]}
+                    >
+                      {formatTime(selectedMessage.createdAt)}
+                    </Text>
+                    {selectedMessage.senderId === user?.uid && (
+                      <Ionicons
+                        name={selectedMessage.isRead ? "checkmark-done" : "checkmark"}
+                        size={14}
+                        color={selectedMessage.isRead ? "#4CAF50" : "#8E8E93"}
+                        style={styles.messageCheckmarks}
+                      />
+                    )}
+                  </View>
                 </View>
-              </View>
+              )}
 
               <View
                 style={[
@@ -818,43 +912,76 @@ export default function ChatScreen() {
                   selectedMessage.senderId === user?.uid ? { right: 0 } : { left: 0 },
                 ]}
               >
-                <Pressable style={styles.menuItem} onPress={handleReplyAction}>
-                  <Ionicons name="arrow-undo-outline" size={20} color={Colors.textPrimary} />
-                  <Text style={styles.menuItemText}>Reply</Text>
-                </Pressable>
-                {!selectedMessage.audio && selectedMessage.senderId === user?.uid && (
-                  <Pressable style={styles.menuItem} onPress={handleEditAction}>
-                    <Ionicons name="pencil-outline" size={20} color={Colors.textPrimary} />
-                    <Text style={styles.menuItemText}>Edit</Text>
-                  </Pressable>
+                {selectedMessage.images && selectedMessage.images.length > 0 ? (
+                  <>
+                    <Pressable style={styles.menuItem} onPress={() => handleReplyAction()}>
+                      <Ionicons name="arrow-undo-outline" size={20} color={Colors.textPrimary} />
+                      <Text style={styles.menuItemText}>Reply</Text>
+                    </Pressable>
+                    <Pressable style={styles.menuItem} onPress={() => handleDownloadImage(selectedMessage.images![0])}>
+                      <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
+                      <Text style={styles.menuItemText}>Download</Text>
+                    </Pressable>
+                    <Pressable style={styles.menuItem} onPress={handlePinAction}>
+                      <Ionicons name={pinnedMessages.some(p => p.id === selectedMessage.id) ? "pin" : "pin-outline"} size={20} color={Colors.textPrimary} />
+                      <Text style={styles.menuItemText}>
+                        {pinnedMessages.some(p => p.id === selectedMessage.id) ? "Unpin" : "Pin"}
+                      </Text>
+                    </Pressable>
+                    <Pressable style={styles.menuItem} onPress={() => handleForwardContextAction()}>
+                      <Ionicons name="arrow-redo-outline" size={20} color={Colors.textPrimary} />
+                      <Text style={styles.menuItemText}>Forward</Text>
+                    </Pressable>
+                    <Pressable style={styles.menuItem} onPress={() => handleDelete()}>
+                      <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                      <Text style={[styles.menuItemText, { color: "#FF3B30" }]}>Delete</Text>
+                    </Pressable>
+                    <Pressable style={styles.menuItem} onPress={handleSelectContextAction}>
+                      <Ionicons name="checkmark-circle-outline" size={20} color={Colors.textPrimary} />
+                      <Text style={styles.menuItemText}>Select</Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <>
+                    <Pressable style={styles.menuItem} onPress={() => handleReplyAction()}>
+                      <Ionicons name="arrow-undo-outline" size={20} color={Colors.textPrimary} />
+                      <Text style={styles.menuItemText}>Reply</Text>
+                    </Pressable>
+                    {!selectedMessage.audio && selectedMessage.senderId === user?.uid && (
+                      <Pressable style={styles.menuItem} onPress={handleEditAction}>
+                        <Ionicons name="pencil-outline" size={20} color={Colors.textPrimary} />
+                        <Text style={styles.menuItemText}>Edit</Text>
+                      </Pressable>
+                    )}
+                    {!selectedMessage.audio && (
+                      <Pressable style={styles.menuItem} onPress={handleCopy}>
+                        <Ionicons name="copy-outline" size={20} color={Colors.textPrimary} />
+                        <Text style={styles.menuItemText}>Copy</Text>
+                      </Pressable>
+                    )}
+                    <Pressable style={styles.menuItem} onPress={handlePinAction}>
+                      <Ionicons name={pinnedMessages.some(p => p.id === selectedMessage.id) ? "pin" : "pin-outline"} size={20} color={Colors.textPrimary} />
+                      <Text style={styles.menuItemText}>
+                        {pinnedMessages.some(p => p.id === selectedMessage.id) ? "Unpin" : "Pin"}
+                      </Text>
+                    </Pressable>
+                    <Pressable style={styles.menuItem} onPress={() => handleForwardContextAction()}>
+                      <Ionicons name="arrow-redo-outline" size={20} color={Colors.textPrimary} />
+                      <Text style={styles.menuItemText}>Forward</Text>
+                    </Pressable>
+                    <Pressable style={styles.menuItem} onPress={handleSelectContextAction}>
+                      <Ionicons name="checkmark-circle-outline" size={20} color={Colors.textPrimary} />
+                      <Text style={styles.menuItemText}>Select</Text>
+                    </Pressable>
+                    <View style={styles.menuDivider} />
+                    <Pressable style={styles.menuItem} onPress={() => handleDelete()}>
+                      <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                      <Text style={[styles.menuItemText, { color: "#FF3B30" }]}>Delete</Text>
+                    </Pressable>
+                  </>
                 )}
-                {!selectedMessage.audio && (
-                  <Pressable style={styles.menuItem} onPress={handleCopy}>
-                    <Ionicons name="copy-outline" size={20} color={Colors.textPrimary} />
-                    <Text style={styles.menuItemText}>Copy</Text>
-                  </Pressable>
-                )}
-                <Pressable style={styles.menuItem} onPress={handlePinAction}>
-                  <Ionicons name={pinnedMessages.some(p => p.id === selectedMessage.id) ? "pin" : "pin-outline"} size={20} color={Colors.textPrimary} />
-                  <Text style={styles.menuItemText}>
-                    {pinnedMessages.some(p => p.id === selectedMessage.id) ? "Unpin" : "Pin"}
-                  </Text>
-                </Pressable>
-                <Pressable style={styles.menuItem} onPress={handleForwardContextAction}>
-                  <Ionicons name="arrow-redo-outline" size={20} color={Colors.textPrimary} />
-                  <Text style={styles.menuItemText}>Forward</Text>
-                </Pressable>
-                <Pressable style={styles.menuItem} onPress={handleSelectContextAction}>
-                  <Ionicons name="checkmark-circle-outline" size={20} color={Colors.textPrimary} />
-                  <Text style={styles.menuItemText}>Select</Text>
-                </Pressable>
-                <View style={styles.menuDivider} />
-                <Pressable style={styles.menuItem} onPress={handleDelete}>
-                  <Ionicons name="trash-outline" size={20} color="#FF3B30" />
-                  <Text style={[styles.menuItemText, { color: "#FF3B30" }]}>Delete</Text>
-                </Pressable>
               </View>
-            </View>
+            </Animated.View>
           )}
         </Pressable>
       </Modal>
@@ -887,6 +1014,38 @@ export default function ChatScreen() {
           />
         </View>
       </Modal>
+
+      {/* Full Screen Image Preview Modal */}
+      <ImagePreviewModal
+        visible={!!previewImage}
+        imageUrl={previewImage?.url || null}
+        contactName={previewImage?.name || ""}
+        timeStr={previewImage?.time || ""}
+        onClose={() => setPreviewImage(null)}
+        onReply={() => {
+          if (previewImage) {
+            handleReplyAction(previewImage.message);
+            setPreviewImage(null);
+          }
+        }}
+        onDownload={() => {
+          if (previewImage) {
+            handleDownloadImage(previewImage.url);
+          }
+        }}
+        onDelete={() => {
+          if (previewImage) {
+            handleDelete(previewImage.message);
+            setPreviewImage(null);
+          }
+        }}
+        onForward={() => {
+          if (previewImage) {
+            handleForwardContextAction(previewImage.message);
+            setPreviewImage(null);
+          }
+        }}
+      />
     </LinearGradient>
   );
 }
