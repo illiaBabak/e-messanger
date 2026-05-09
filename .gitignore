@@ -47,3 +47,4 @@ app-example
 /android
 .agents
 .env
+AGENTS.md

@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import { Image } from "expo-image";
-import React from "react";
+import React, { useRef } from "react";
 import { ActivityIndicator, Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Colors } from "@/constants/theme";
@@ -28,43 +28,47 @@ export const ImageMessage = ({
   onPress,
   onLongPress,
 }: ImageMessageProps) => {
-  const handleLongPress = (e: any) => {
-    e.target.measure((x: number, y: number, w: number, h: number, pageX: number, pageY: number) => {
-      onLongPress({ x: pageX, y: pageY, width: w, height: h });
+  const containerRef = useRef<View>(null);
+
+  const handleLongPress = () => {
+    containerRef.current?.measure((_x, _y, measuredWidth, measuredHeight, pageX, pageY) => {
+      onLongPress({ x: pageX, y: pageY, width: measuredWidth, height: measuredHeight });
     });
   };
 
   return (
-    <Pressable
-      onPress={onPress}
-      onLongPress={handleLongPress}
-      delayLongPress={250}
-      style={[styles.container, isMe ? styles.containerMe : styles.containerFriend]}
-    >
-      <Image source={url} style={styles.image} contentFit="cover" transition={200} />
-      
-      {status === "sending" && (
-        <View style={styles.sendingOverlay}>
-          <ActivityIndicator size="small" color={Colors.white} />
-        </View>
-      )}
+    <View ref={containerRef} collapsable={false}>
+      <Pressable
+        onPress={onPress}
+        onLongPress={handleLongPress}
+        delayLongPress={250}
+        style={[styles.container, isMe ? styles.containerMe : styles.containerFriend]}
+      >
+        <Image source={url} style={styles.image} contentFit="cover" transition={200} />
 
-      {/* Time overlay with glassmorphism */}
-      <View style={styles.timeOverlayContainer}>
-        <BlurView intensity={30} tint="dark" style={styles.timeBlur} />
-        <View style={styles.timeContent}>
-          <Text style={styles.timeText}>{timeStr}</Text>
-          {isMe && status !== "sending" && (
-            <Ionicons
-              name={isRead ? "checkmark-done" : "checkmark"}
-              size={14}
-              color={isRead ? "#4CAF50" : Colors.white}
-              style={styles.checkmark}
-            />
-          )}
+        {status === "sending" && (
+          <View style={styles.sendingOverlay}>
+            <ActivityIndicator size="small" color={Colors.white} />
+          </View>
+        )}
+
+        {/* Time overlay with glassmorphism */}
+        <View style={styles.timeOverlayContainer}>
+          <BlurView intensity={30} tint="dark" style={styles.timeBlur} />
+          <View style={styles.timeContent}>
+            <Text style={styles.timeText}>{timeStr}</Text>
+            {isMe && status !== "sending" && (
+              <Ionicons
+                name={isRead ? "checkmark-done" : "checkmark"}
+                size={14}
+                color={isRead ? "#4CAF50" : Colors.white}
+                style={styles.checkmark}
+              />
+            )}
+          </View>
         </View>
-      </View>
-    </Pressable>
+      </Pressable>
+    </View>
   );
 };
 

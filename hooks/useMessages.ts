@@ -15,8 +15,12 @@ import {
   writeBatch
 } from "@react-native-firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
+import type { ChatVideo, SelectedChatMedia } from "@/types/chatMedia";
 import { firestore } from "../services/firebase";
-import { uploadImageMessage, uploadVoiceMessage } from "../services/storage";
+import { uploadFileMessage, uploadImageMessage, uploadVideoMessage, uploadVoiceMessage } from "../services/storage";
+
+const DEFAULT_VIDEO_FILE_NAME = "video.mp4";
+const DEFAULT_VIDEO_MIME_TYPE = "video/mp4";
 
 export type ReplyToSnippet = {
   id: string;
@@ -46,17 +50,73 @@ export type Message = {
     waveform: number[];
   };
   images?: string[];
+  file?: {
+    name: string;
+    url: string;
+    mimeType?: string;
+    size?: number;
+  };
+  video?: ChatVideo;
   status?: "sending" | "sent" | "error";
 };
 
-export function getMessagePreviewText(message: Message | PinnedMessage | ReplyToSnippet | { text?: string; audio?: unknown; images?: unknown }): string {
-  if ('images' in message && message.images) {
+export function getMessagePreviewText(message: Message | PinnedMessage | ReplyToSnippet | { text?: string; audio?: unknown; images?: unknown; file?: unknown; video?: unknown }): string {
+  if ('images' in message && Array.isArray(message.images) && message.images.length > 0) {
     return "📷 Image";
+  }
+  if ('video' in message && message.video) {
+    return "🎬 Video";
   }
   if ('audio' in message && message.audio) {
     return "🎤 Voice message";
   }
+  if ('file' in message && message.file) {
+    return "📎 File";
+  }
   return message.text || "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getOptionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function getChatVideoFromFirestore(value: unknown): ChatVideo | undefined {
+  if (!isRecord(value) || typeof value.url !== "string") {
+    return undefined;
+  }
+
+  const size = getOptionalNumber(value.size);
+  const duration = getOptionalNumber(value.duration);
+  const width = getOptionalNumber(value.width);
+  const height = getOptionalNumber(value.height);
+
+  return {
+    mediaType: "video",
+    url: value.url,
+    fileName: typeof value.fileName === "string" ? value.fileName : DEFAULT_VIDEO_FILE_NAME,
+    mimeType: typeof value.mimeType === "string" ? value.mimeType : DEFAULT_VIDEO_MIME_TYPE,
+    ...(size !== undefined && { size }),
+    ...(duration !== undefined && { duration }),
+    ...(width !== undefined && { width }),
+    ...(height !== undefined && { height }),
+  };
+}
+
+function buildChatVideoPayload(videoInfo: SelectedChatMedia, url: string): ChatVideo {
+  return {
+    mediaType: "video",
+    url,
+    fileName: videoInfo.fileName ?? DEFAULT_VIDEO_FILE_NAME,
+    mimeType: videoInfo.mimeType ?? DEFAULT_VIDEO_MIME_TYPE,
+    ...(videoInfo.fileSize !== undefined && { size: videoInfo.fileSize }),
+    ...(videoInfo.duration !== undefined && { duration: videoInfo.duration }),
+    ...(videoInfo.width !== undefined && { width: videoInfo.width }),
+    ...(videoInfo.height !== undefined && { height: videoInfo.height }),
+  };
 }
 
 export function useMessages(currentUserId: string | undefined | null, contactId: string | undefined) {
@@ -115,6 +175,8 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
             isEdited: data.isEdited,
             audio: data.audio,
             images: data.images,
+            file: data.file,
+            video: getChatVideoFromFirestore(data.video),
           });
 
           if (data.senderId !== currentUserId && !data.isRead) {
@@ -199,13 +261,15 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
     text: string, 
     replyTo?: ReplyToSnippet,
     audioInfo?: { uri: string; duration: number; waveform: number[] },
-    imagesUris?: string[]
+    imagesUris?: string[],
+    fileInfo?: { name: string; uri: string; mimeType?: string; size?: number },
+    videoInfo?: SelectedChatMedia,
   ) => {
     if (!chatId || !currentUserId || !contactId) return;
-    if (!text.trim() && !audioInfo && (!imagesUris || imagesUris.length === 0)) return;
+    if (!text.trim() && !audioInfo && (!imagesUris || imagesUris.length === 0) && !fileInfo && !videoInfo) return;
 
     const newMessageRef = doc(collection(firestore, "chats", chatId, "messages"));
-    const isMedia = !!audioInfo || (imagesUris && imagesUris.length > 0);
+    const isMedia = !!audioInfo || (imagesUris && imagesUris.length > 0) || !!fileInfo || !!videoInfo;
     
     if (isMedia) {
       const pendingMessage: Message = {
@@ -217,6 +281,8 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         status: "sending",
         ...(replyTo && { replyTo }),
         ...(imagesUris && imagesUris.length > 0 && { images: imagesUris }),
+        ...(fileInfo && { file: { ...fileInfo, url: fileInfo.uri } }),
+        ...(videoInfo && { video: buildChatVideoPayload(videoInfo, videoInfo.uri) }),
         ...(audioInfo && {
           audio: {
             url: audioInfo.uri, // use local uri
@@ -243,6 +309,22 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         );
       }
 
+      let fileUrl;
+      if (fileInfo) {
+        fileUrl = await uploadFileMessage(fileInfo.uri, fileInfo.name, chatId, newMessageRef.id);
+      }
+
+      let videoUrl;
+      if (videoInfo) {
+        videoUrl = await uploadVideoMessage(
+          videoInfo.uri,
+          chatId,
+          newMessageRef.id,
+          videoInfo.fileName,
+          videoInfo.mimeType ?? DEFAULT_VIDEO_MIME_TYPE,
+        );
+      }
+
       const messageData = {
         text: text.trim(),
         senderId: currentUserId,
@@ -257,6 +339,17 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
           }
         }),
         ...(imageUrls.length > 0 && { images: imageUrls }),
+        ...(fileInfo && fileUrl && {
+          file: {
+            name: fileInfo.name,
+            url: fileUrl,
+            mimeType: fileInfo.mimeType,
+            size: fileInfo.size,
+          }
+        }),
+        ...(videoInfo && videoUrl && {
+          video: buildChatVideoPayload(videoInfo, videoUrl),
+        }),
       };
 
       batch.set(newMessageRef, messageData);
@@ -268,7 +361,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         {
           participants: [currentUserId, contactId],
           lastMessage: {
-            text: getMessagePreviewText({ text: text.trim(), audio: audioInfo, images: imageUrls }),
+            text: getMessagePreviewText({ text: text.trim(), audio: audioInfo, images: imageUrls, file: fileInfo, video: videoInfo }),
             senderId: currentUserId,
             createdAt: serverTimestamp(),
           },
@@ -295,7 +388,9 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
     text: string, 
     replyTo?: ReplyToSnippet,
     audioInfo?: { uri: string; duration: number; waveform: number[] },
-    imagesUris?: string[]
+    imagesUris?: string[],
+    fileInfo?: { name: string; uri: string; mimeType?: string; size?: number },
+    videoInfo?: SelectedChatMedia,
   ) => {
     if (!chatId || !currentUserId || !contactId) return;
 
@@ -308,7 +403,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
       return;
     }
 
-    return _sendMessage(text, replyTo, audioInfo, undefined);
+    return _sendMessage(text, replyTo, audioInfo, undefined, fileInfo, videoInfo);
   };
 
   const deleteMessage = async (messageId: string, type: "me" | "everyone") => {
@@ -417,6 +512,14 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
 
         if (msg.audio) {
           messageData.audio = msg.audio;
+        }
+
+        if (msg.file) {
+          messageData.file = msg.file;
+        }
+
+        if (msg.video) {
+          messageData.video = msg.video;
         }
 
         batch.set(newMessageRef, messageData);

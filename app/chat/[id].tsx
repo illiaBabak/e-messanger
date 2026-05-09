@@ -26,14 +26,44 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ChatInput } from "@/components/chat/ChatInput";
+import { FileMessage } from "@/components/chat/FileMessage";
 import { ImageMessage } from "@/components/chat/ImageMessage";
 import { ImagePreviewModal } from "@/components/chat/ImagePreviewModal";
+import { VideoMessage } from "@/components/chat/VideoMessage";
+import { VideoPreviewModal } from "@/components/chat/VideoPreviewModal";
 import { VoiceMessagePlayer } from "@/components/chat/VoiceMessagePlayer";
 import { Colors, FontSizes, Spacing } from "@/constants/theme";
 import { useChatsList } from "@/hooks/useChatsList";
 import { useContacts } from "@/hooks/useContacts";
 import { getMessagePreviewText, Message, useMessages } from "@/hooks/useMessages";
 import { useAuth } from "@/providers/AuthProvider";
+import type { ChatVideo, SelectedChatMedia } from "@/types/chatMedia";
+import { saveDownloadedMediaRecord, type DownloadedMediaRecord } from "@/utils/downloadedMediaStorage";
+import { downloadVideoToLibraryAsync } from "@/utils/downloadVideoToLibrary";
+
+const VIDEO_PREVIEW_URI_PATTERN = /^(https?:\/\/|file:\/\/)/i;
+
+function isValidVideoPreviewUri(uri: string): boolean {
+  return VIDEO_PREVIEW_URI_PATTERN.test(uri.trim());
+}
+
+function getDownloadErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  return "Could not download video.";
+}
+
+async function saveDownloadedMediaRecordSafely(
+  record: DownloadedMediaRecord,
+): Promise<void> {
+  try {
+    await saveDownloadedMediaRecord(record);
+  } catch (error) {
+    console.warn("Failed to save downloaded media record", error);
+  }
+}
 
 type MessageItemProps = {
   item: Message;
@@ -44,11 +74,12 @@ type MessageItemProps = {
   isHighlighted: boolean;
   onPress: (id: string) => void;
   onImagePress: (url: string, contactName: string, timeStr: string, message: Message) => void;
+  onVideoPress: (video: ChatVideo, contactName: string, timeStr: string, message: Message) => void;
   onLongPress: (item: Message, layout: { x: number; y: number; width: number; height: number }) => void;
   onScrollToReply: (id: string) => void;
 };
 
-const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, isSelected, isHighlighted, onPress, onImagePress, onLongPress, onScrollToReply }: MessageItemProps) => {
+const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, isSelected, isHighlighted, onPress, onImagePress, onVideoPress, onLongPress, onScrollToReply }: MessageItemProps) => {
   const viewRef = useRef<View>(null);
   const isMe = item.senderId === currentUserId;
   const highlightOpacity = useRef(new Animated.Value(0)).current;
@@ -86,6 +117,14 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
     }
   };
 
+  const handleVideoPress = () => {
+    if (isSelectionMode) {
+      onPress(item.id);
+    } else if (item.video) {
+      onVideoPress(item.video, contactName, new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), item);
+    }
+  };
+
   const handleLongPress = () => {
     if (isSelectionMode) return;
     viewRef.current?.measure((x, y, width, height, pageX, pageY) => {
@@ -93,7 +132,10 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
     });
   };
 
-  const isOnlyImage = item.images && item.images.length > 0 && !item.text && !item.audio && !item.replyTo && !item.isForwarded;
+  const hasImages = Array.isArray(item.images) && item.images.length > 0;
+  const isOnlyImage = hasImages && !item.text && !item.audio && !item.replyTo && !item.isForwarded && !item.file && !item.video;
+  const isOnlyVideo = item.video && !item.text && !item.audio && !hasImages && !item.replyTo && !item.isForwarded && !item.file;
+  const isOnlyFile = item.file && !item.text && !item.audio && !hasImages && !item.replyTo && !item.isForwarded && !item.video;
 
   if (isOnlyImage) {
     return (
@@ -109,13 +151,71 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
         )}
         <View style={[styles.messageRow, isMe ? styles.messageRowMe : styles.messageRowFriend]}>
            <ImageMessage
-              url={item.images![0]}
+              url={item.images?.[0] ?? ""}
               isMe={isMe}
               timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              status={item.status as any}
+              status={item.status}
               isRead={item.isRead}
               onPress={handleImagePress}
               onLongPress={(layout) => onLongPress(item, layout)}
+           />
+        </View>
+      </View>
+    );
+  }
+
+  if (isOnlyVideo && item.video) {
+    return (
+      <View style={styles.messageWrapper}>
+        {isSelectionMode && (
+          <Pressable onPress={handlePress} style={styles.selectionCheckbox}>
+            <Ionicons
+              name={isSelected ? "checkmark-circle" : "ellipse-outline"}
+              size={24}
+              color={isSelected ? Colors.primary : Colors.textMuted}
+            />
+          </Pressable>
+        )}
+        <View style={[styles.messageRow, isMe ? styles.messageRowMe : styles.messageRowFriend]}>
+          <VideoMessage
+            uri={item.video.url}
+            fileName={item.video.fileName}
+            duration={item.video.duration}
+            isMe={isMe}
+            timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            status={item.status}
+            isRead={item.isRead}
+            onPress={handleVideoPress}
+            onLongPress={(layout) => onLongPress(item, layout)}
+          />
+        </View>
+      </View>
+    );
+  }
+
+  if (isOnlyFile && item.file) {
+    return (
+      <View style={styles.messageWrapper}>
+        {isSelectionMode && (
+          <Pressable onPress={handlePress} style={styles.selectionCheckbox}>
+            <Ionicons
+              name={isSelected ? "checkmark-circle" : "ellipse-outline"}
+              size={24}
+              color={isSelected ? Colors.primary : Colors.textMuted}
+            />
+          </Pressable>
+        )}
+        <View style={[styles.messageRow, isMe ? styles.messageRowMe : styles.messageRowFriend]}>
+           <FileMessage
+              name={item.file.name}
+              url={item.file.url}
+              mimeType={item.file.mimeType}
+              size={item.file.size}
+              isMe={isMe}
+              timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              status={item.status}
+              isRead={item.isRead}
+              onLongPress={handleLongPress}
            />
         </View>
       </View>
@@ -176,7 +276,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
               </View>
             </Pressable>
           )}
-          {item.images && item.images.length > 0 && (
+          {hasImages && item.images && (
             <View style={styles.imageGrid}>
               {item.images.map((url, idx) => (
                 <Pressable key={idx} style={styles.messageImageWrapper} onPress={handleImagePress}>
@@ -195,6 +295,31 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
               ))}
             </View>
           )}
+          {item.video ? (
+            <VideoMessage
+              uri={item.video.url}
+              fileName={item.video.fileName}
+              duration={item.video.duration}
+              isMe={isMe}
+              timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              status={item.status}
+              isRead={item.isRead}
+              onPress={handleVideoPress}
+              onLongPress={(layout) => onLongPress(item, layout)}
+            />
+          ) : null}
+          {item.file ? (
+            <FileMessage
+              name={item.file.name}
+              url={item.file.url}
+              mimeType={item.file.mimeType}
+              size={item.file.size}
+              isMe={isMe}
+              timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              status={item.status}
+              isRead={item.isRead}
+            />
+          ) : null}
           {item.audio ? (
             <VoiceMessagePlayer
               messageId={item.id}
@@ -204,7 +329,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
               isOwnMessage={isMe}
             />
           ) : item.text ? (
-            <Text style={[styles.messageText, isMe ? styles.messageTextMe : styles.messageTextFriend, { marginTop: item.images && item.images.length > 0 ? 8 : 0 }]}>
+            <Text style={[styles.messageText, isMe ? styles.messageTextMe : styles.messageTextFriend, { marginTop: hasImages || item.file || item.video ? 8 : 0 }]}>
               {item.text}
             </Text>
           ) : null}
@@ -231,6 +356,8 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
     </View>
   );
 });
+
+MessageItem.displayName = "MessageItem";
 
 export default function ChatScreen() {
   const router = useRouter();
@@ -328,6 +455,8 @@ export default function ChatScreen() {
 
   // Image Preview State
   const [previewImage, setPreviewImage] = useState<{ url: string, name: string, time: string, message: Message } | null>(null);
+  const [previewVideo, setPreviewVideo] = useState<{ video: ChatVideo, name: string, time: string, message: Message } | null>(null);
+  const [galleryRefreshKey, setGalleryRefreshKey] = useState(0);
 
   const handleDownloadImage = async (url: string) => {
     try {
@@ -337,11 +466,42 @@ export default function ChatScreen() {
         const file = await FileSystem.File.downloadFileAsync(url, downloadFile);
         fileUri = file.uri;
       }
-      await MediaLibrary.createAssetAsync(fileUri);
+      const asset = await MediaLibrary.createAssetAsync(fileUri);
+      await saveDownloadedMediaRecordSafely({
+        assetId: asset.id,
+        savedAt: Date.now(),
+        type: "photo",
+        fileName: asset.filename,
+      });
+      setGalleryRefreshKey(previousKey => previousKey + 1);
       showToast("Image saved to gallery");
       closeMenu();
-    } catch (error) {
+    } catch {
       Alert.alert("Error", "Could not download image");
+      closeMenu();
+    }
+  };
+
+  const handleDownloadVideo = async (video: ChatVideo) => {
+    try {
+      const result = await downloadVideoToLibraryAsync({
+        uri: video.url,
+        fileName: video.fileName,
+        mimeType: video.mimeType,
+      });
+      await saveDownloadedMediaRecordSafely({
+        assetId: result.assetId,
+        savedAt: Date.now(),
+        type: "video",
+        fileName: video.fileName,
+        mimeType: video.mimeType,
+      });
+      setGalleryRefreshKey(previousKey => previousKey + 1);
+      showToast("Video saved to gallery");
+      closeMenu();
+    } catch (error) {
+      console.error("Failed to download video", error);
+      Alert.alert("Video Download Failed", getDownloadErrorMessage(error));
       closeMenu();
     }
   };
@@ -555,7 +715,7 @@ export default function ChatScreen() {
     if (msgs.length > 0) {
       try {
         await forwardMessages(contactId, msgs);
-      } catch (e) {
+      } catch {
         Alert.alert("Error", "Could not forward messages.");
       }
     }
@@ -616,6 +776,28 @@ export default function ChatScreen() {
     setPreviewImage({ url, name: contactName, time: timeStr, message });
   }, []);
 
+  const handleVideoPress = useCallback((video: ChatVideo, contactName: string, timeStr: string, message: Message) => {
+    if (!isValidVideoPreviewUri(video.url)) {
+      Alert.alert("Video Error", "This video has an invalid playback URL.");
+      return;
+    }
+
+    setPreviewVideo({ video, name: contactName, time: timeStr, message });
+  }, []);
+
+  const handleSendVideo = useCallback(
+    async (video: SelectedChatMedia) => {
+      try {
+        await sendMessage("", undefined, undefined, undefined, undefined, video);
+      } catch (error) {
+        console.error("Failed to send video:", error);
+        Alert.alert("Error", "Could not send video.");
+        throw error;
+      }
+    },
+    [sendMessage],
+  );
+
   const handleScrollToReply = useCallback((id: string) => {
     scrollToMessageId(id);
   }, [scrollToMessageId]);
@@ -630,10 +812,28 @@ export default function ChatScreen() {
       isHighlighted={highlightedMessageId === item.id}
       onPress={handleMessagePress}
       onImagePress={handleImagePress}
+      onVideoPress={handleVideoPress}
       onLongPress={handleMessageLongPress}
       onScrollToReply={handleScrollToReply}
     />
-  ), [user?.uid, name, isSelectionMode, selectedMessageIds, highlightedMessageId, handleMessagePress, handleImagePress, handleMessageLongPress, handleScrollToReply]);
+  ), [user?.uid, name, isSelectionMode, selectedMessageIds, highlightedMessageId, handleMessagePress, handleImagePress, handleVideoPress, handleMessageLongPress, handleScrollToReply]);
+
+  const previewVideoMedia = useMemo<SelectedChatMedia | null>(() => {
+    if (!previewVideo) {
+      return null;
+    }
+
+    return {
+      uri: previewVideo.video.url,
+      type: "video",
+      fileName: previewVideo.video.fileName,
+      mimeType: previewVideo.video.mimeType,
+      duration: previewVideo.video.duration,
+      width: previewVideo.video.width,
+      height: previewVideo.video.height,
+      fileSize: previewVideo.video.size,
+    };
+  }, [previewVideo]);
 
   return (
     <LinearGradient
@@ -780,6 +980,11 @@ export default function ChatScreen() {
               onSendMedia={(uris) => {
                 sendMessage("", undefined, undefined, uris).catch(console.error);
               }}
+              onSendVideo={handleSendVideo}
+              onSendFile={(fileInfo) => {
+                sendMessage("", undefined, undefined, undefined, fileInfo).catch(console.error);
+              }}
+              galleryRefreshKey={galleryRefreshKey}
               replyingToMessage={replyingToMessage}
               editingMessage={editingMessage}
               onCancelReplyOrEdit={() => {
@@ -818,15 +1023,43 @@ export default function ChatScreen() {
                 height: messageLayout.height,
               }}
             >
-              {selectedMessage.images && selectedMessage.images.length > 0 ? (
+              {selectedMessage.images && selectedMessage.images.length > 0 && !selectedMessage.text && !selectedMessage.audio && !selectedMessage.replyTo && !selectedMessage.isForwarded && !selectedMessage.file && !selectedMessage.video ? (
                 <View pointerEvents="none">
                   <ImageMessage
                     url={selectedMessage.images[0]}
                     isMe={selectedMessage.senderId === user?.uid}
                     timeStr={formatTime(selectedMessage.createdAt)}
-                    status={selectedMessage.status as "sending" | "sent" | "error" | "read" | undefined}
+                    status={selectedMessage.status}
                     isRead={selectedMessage.isRead}
                     onPress={() => {}}
+                    onLongPress={() => {}}
+                  />
+                </View>
+              ) : selectedMessage.video && !selectedMessage.text && !selectedMessage.audio && !selectedMessage.images && !selectedMessage.replyTo && !selectedMessage.isForwarded && !selectedMessage.file ? (
+                <View pointerEvents="none">
+                  <VideoMessage
+                    uri={selectedMessage.video.url}
+                    fileName={selectedMessage.video.fileName}
+                    duration={selectedMessage.video.duration}
+                    isMe={selectedMessage.senderId === user?.uid}
+                    timeStr={formatTime(selectedMessage.createdAt)}
+                    status={selectedMessage.status}
+                    isRead={selectedMessage.isRead}
+                    onPress={() => {}}
+                    onLongPress={() => {}}
+                  />
+                </View>
+              ) : selectedMessage.file && !selectedMessage.text && !selectedMessage.audio && !selectedMessage.images && !selectedMessage.replyTo && !selectedMessage.isForwarded && !selectedMessage.video ? (
+                <View pointerEvents="none">
+                  <FileMessage
+                    name={selectedMessage.file.name}
+                    url={selectedMessage.file.url}
+                    mimeType={selectedMessage.file.mimeType}
+                    size={selectedMessage.file.size}
+                    isMe={selectedMessage.senderId === user?.uid}
+                    timeStr={formatTime(selectedMessage.createdAt)}
+                    status={selectedMessage.status}
+                    isRead={selectedMessage.isRead}
                     onLongPress={() => {}}
                   />
                 </View>
@@ -865,6 +1098,29 @@ export default function ChatScreen() {
                       duration={selectedMessage.audio.duration}
                       waveform={selectedMessage.audio.waveform}
                       isOwnMessage={selectedMessage.senderId === user?.uid}
+                    />
+                  ) : selectedMessage.video ? (
+                    <VideoMessage
+                      uri={selectedMessage.video.url}
+                      fileName={selectedMessage.video.fileName}
+                      duration={selectedMessage.video.duration}
+                      isMe={selectedMessage.senderId === user?.uid}
+                      timeStr={formatTime(selectedMessage.createdAt)}
+                      status={selectedMessage.status}
+                      isRead={selectedMessage.isRead}
+                      onPress={() => {}}
+                      onLongPress={() => {}}
+                    />
+                  ) : selectedMessage.file ? (
+                    <FileMessage
+                      name={selectedMessage.file.name}
+                      url={selectedMessage.file.url}
+                      mimeType={selectedMessage.file.mimeType}
+                      size={selectedMessage.file.size}
+                      isMe={selectedMessage.senderId === user?.uid}
+                      timeStr={formatTime(selectedMessage.createdAt)}
+                      status={selectedMessage.status}
+                      isRead={selectedMessage.isRead}
                     />
                   ) : (
                     <Text
@@ -918,7 +1174,7 @@ export default function ChatScreen() {
                       <Ionicons name="arrow-undo-outline" size={20} color={Colors.textPrimary} />
                       <Text style={styles.menuItemText}>Reply</Text>
                     </Pressable>
-                    <Pressable style={styles.menuItem} onPress={() => handleDownloadImage(selectedMessage.images![0])}>
+                    <Pressable style={styles.menuItem} onPress={() => handleDownloadImage(selectedMessage.images?.[0] ?? "")}>
                       <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
                       <Text style={styles.menuItemText}>Download</Text>
                     </Pressable>
@@ -947,13 +1203,26 @@ export default function ChatScreen() {
                       <Ionicons name="arrow-undo-outline" size={20} color={Colors.textPrimary} />
                       <Text style={styles.menuItemText}>Reply</Text>
                     </Pressable>
-                    {!selectedMessage.audio && selectedMessage.senderId === user?.uid && (
+                    {selectedMessage.video ? (
+                      <Pressable
+                        style={styles.menuItem}
+                        onPress={() => {
+                          if (selectedMessage.video) {
+                            void handleDownloadVideo(selectedMessage.video);
+                          }
+                        }}
+                      >
+                        <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
+                        <Text style={styles.menuItemText}>Download</Text>
+                      </Pressable>
+                    ) : null}
+                    {!selectedMessage.audio && !selectedMessage.video && !selectedMessage.file && selectedMessage.text && selectedMessage.senderId === user?.uid && (
                       <Pressable style={styles.menuItem} onPress={handleEditAction}>
                         <Ionicons name="pencil-outline" size={20} color={Colors.textPrimary} />
                         <Text style={styles.menuItemText}>Edit</Text>
                       </Pressable>
                     )}
-                    {!selectedMessage.audio && (
+                    {!selectedMessage.audio && !selectedMessage.video && !selectedMessage.file && selectedMessage.text && (
                       <Pressable style={styles.menuItem} onPress={handleCopy}>
                         <Ionicons name="copy-outline" size={20} color={Colors.textPrimary} />
                         <Text style={styles.menuItemText}>Copy</Text>
@@ -1045,6 +1314,43 @@ export default function ChatScreen() {
             setPreviewImage(null);
           }
         }}
+      />
+
+      <VideoPreviewModal
+        visible={!!previewVideo}
+        video={previewVideoMedia}
+        title={previewVideo?.name || ""}
+        timeStr={previewVideo?.time}
+        showTrimControls={false}
+        autoPlay
+        showActionsMenu
+        showSendButton={false}
+        actions={{
+          onDownload: () => {
+            if (previewVideo) {
+              void handleDownloadVideo(previewVideo.video);
+            }
+          },
+          onReply: () => {
+            if (previewVideo) {
+              handleReplyAction(previewVideo.message);
+              setPreviewVideo(null);
+            }
+          },
+          onForward: () => {
+            if (previewVideo) {
+              handleForwardContextAction(previewVideo.message);
+              setPreviewVideo(null);
+            }
+          },
+          onDelete: () => {
+            if (previewVideo) {
+              handleDelete(previewVideo.message);
+              setPreviewVideo(null);
+            }
+          },
+        }}
+        onClose={() => setPreviewVideo(null)}
       />
     </LinearGradient>
   );

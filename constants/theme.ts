@@ -23,7 +23,8 @@ export const Colors = {
 
   overlay: 'rgba(0, 0, 0, 0.3)',
   transparent: 'transparent',
-  
+  surface: '#FFFFFF',
+  surfaceLight: '#F9FAFB',
 };
 
 export const Spacing = {

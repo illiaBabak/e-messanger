@@ -1,5 +1,6 @@
 import { Colors } from "@/constants/theme";
 import { Message, getMessagePreviewText } from "@/hooks/useMessages";
+import type { SelectedChatMedia } from "@/types/chatMedia";
 import { Ionicons } from "@expo/vector-icons";
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import React, { useEffect, useRef, useState } from "react";
@@ -14,6 +15,9 @@ type ChatInputProps = {
   onSendText: () => void;
   onSendAudio: (info: AudioInfo) => void;
   onSendMedia?: (uris: string[]) => void;
+  onSendVideo?: (video: SelectedChatMedia) => Promise<void> | void;
+  onSendFile?: (fileInfo: { name: string; uri: string; mimeType?: string; size?: number }) => void;
+  galleryRefreshKey?: number;
   replyingToMessage: Message | null;
   editingMessage: Message | null;
   onCancelReplyOrEdit: () => void;
@@ -34,6 +38,9 @@ export const ChatInput = ({
   currentUserId,
   textInputRef,
   onSendMedia,
+  onSendVideo,
+  onSendFile,
+  galleryRefreshKey = 0,
 }: ChatInputProps) => {
   const [isAttachmentModalVisible, setIsAttachmentModalVisible] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -243,9 +250,16 @@ export const ChatInput = ({
         visible={isAttachmentModalVisible}
         onClose={() => setIsAttachmentModalVisible(false)}
         contactName={name}
+        galleryRefreshKey={galleryRefreshKey}
         onSendMedia={(uris) => {
           if (onSendMedia) {
             onSendMedia(uris);
+          }
+        }}
+        onSendVideo={onSendVideo}
+        onSendFile={(fileInfo) => {
+          if (onSendFile) {
+            onSendFile(fileInfo);
           }
         }}
       />

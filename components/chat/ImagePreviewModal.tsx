@@ -5,6 +5,7 @@ import { Dimensions, Modal, Pressable, StyleSheet, Text, View } from "react-nati
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Colors } from "@/constants/theme";
+import { PreviewActionsMenu } from "./PreviewActionsMenu";
 
 const { width, height } = Dimensions.get("window");
 
@@ -35,11 +36,6 @@ export const ImagePreviewModal = ({
   const [menuVisible, setMenuVisible] = useState(false);
 
   if (!imageUrl) return null;
-
-  const handleAction = (action: () => void) => {
-    setMenuVisible(false);
-    action();
-  };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -73,27 +69,17 @@ export const ImagePreviewModal = ({
 
         {/* Popover Menu Overlay */}
         {menuVisible && (
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setMenuVisible(false)}>
-            <View style={[styles.popoverMenu, { top: Math.max(insets.top, 20) + 44 }]}>
-              <Pressable style={styles.menuItem} onPress={() => handleAction(onDownload)}>
-                <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
-                <Text style={styles.menuItemText}>Download</Text>
-              </Pressable>
-              <Pressable style={styles.menuItem} onPress={() => handleAction(onReply)}>
-                <Ionicons name="arrow-undo-outline" size={20} color={Colors.textPrimary} />
-                <Text style={styles.menuItemText}>Reply</Text>
-              </Pressable>
-              <Pressable style={styles.menuItem} onPress={() => handleAction(onForward)}>
-                <Ionicons name="arrow-redo-outline" size={20} color={Colors.textPrimary} />
-                <Text style={styles.menuItemText}>Forward</Text>
-              </Pressable>
-              <View style={styles.menuDivider} />
-              <Pressable style={styles.menuItem} onPress={() => handleAction(onDelete)}>
-                <Ionicons name="trash-outline" size={20} color="#FF3B30" />
-                <Text style={[styles.menuItemText, { color: "#FF3B30" }]}>Delete</Text>
-              </Pressable>
-            </View>
-          </Pressable>
+          <PreviewActionsMenu
+            visible={menuVisible}
+            top={Math.max(insets.top, 20) + 44}
+            onClose={() => setMenuVisible(false)}
+            actions={{
+              onDownload,
+              onReply,
+              onForward,
+              onDelete,
+            }}
+          />
         )}
       </View>
     </Modal>
@@ -138,35 +124,5 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.7)",
     fontSize: 12,
     marginTop: 2,
-  },
-  popoverMenu: {
-    position: "absolute",
-    right: 16,
-    backgroundColor: Colors.background,
-    borderRadius: 12,
-    paddingVertical: 8,
-    minWidth: 160,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  menuItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  menuItemText: {
-    color: Colors.textPrimary,
-    fontSize: 16,
-  },
-  menuDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    marginVertical: 4,
-    marginHorizontal: 16,
   },
 });

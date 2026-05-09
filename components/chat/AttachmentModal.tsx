@@ -1,12 +1,18 @@
+import { formatFileSize, getFileIconByMimeType } from "@/utils/fileHelpers";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Skia } from "@shopify/react-native-skia";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
 import { Image } from "expo-image";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import * as MediaLibrary from "expo-media-library";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { getThumbnailAsync } from "expo-video-thumbnails";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   FlatList,
@@ -22,13 +28,14 @@ import Reanimated, { useAnimatedStyle, withTiming } from "react-native-reanimate
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Colors } from "@/constants/theme";
-
-const { height: SCREEN_HEIGHT } = Dimensions.get("window");
-const EDIT_MODE_SCALE = 1;
-const EDIT_MODE_TRANSLATE_Y = -(SCREEN_HEIGHT * 0.11);
-const ANIMATION_DURATION = 250;
-const BOTTOM_CONTROLS_HEIGHT = 180;
-
+import type { SelectedChatMedia } from "@/types/chatMedia";
+import {
+  getDownloadedMediaRecords,
+  removeDownloadedMediaRecords,
+  type DownloadedMediaRecord,
+} from "@/utils/downloadedMediaStorage";
+import { ensureUploadableLocalFileAsync, getUriWithoutHash } from "@/utils/ensureUploadableLocalFile";
+import { VideoPreviewModal } from "./VideoPreviewModal";
 import {
   BRUSH_SIZES,
   BrushSize,
@@ -47,6 +54,14 @@ import {
   PaintToolbar,
 } from "./imageEditor";
 
+const { height: SCREEN_HEIGHT } = Dimensions.get("window");
+const EDIT_MODE_SCALE = 1;
+const EDIT_MODE_TRANSLATE_Y = -(SCREEN_HEIGHT * 0.11);
+const ANIMATION_DURATION = 250;
+const VIDEO_DURATION_MS_MULTIPLIER = 1000;
+const VIDEO_THUMBNAIL_TIME_MS = 1000;
+const DEFAULT_VIDEO_MIME_TYPE = "video/mp4";
+
 const { width, height } = Dimensions.get("window");
 const COLUMN_COUNT = 3;
 const ITEM_MARGIN = 2;
@@ -57,31 +72,247 @@ type AttachmentModalProps = {
   visible: boolean;
   onClose: () => void;
   onSendMedia: (uris: string[]) => void;
+  onSendVideo?: (video: SelectedChatMedia) => Promise<void> | void;
   contactName: string;
+  galleryRefreshKey?: number;
+  onSendFile?: (fileInfo: { name: string; uri: string; mimeType?: string; size?: number }) => void;
 };
 
-type TabType = "Gallery" | "File" | "Canvas";
+type RecentFile = {
+  id: string;
+  name: string;
+  uri: string;
+  mimeType?: string;
+  size?: number;
+  sentAt: number;
+};
+
+type TabType = "Gallery" | "File";
+
+type GalleryVideoThumbnailProps = {
+  asset: MediaLibrary.Asset;
+};
+
+type ResolvedDownloadedMediaAsset = {
+  record: DownloadedMediaRecord;
+  asset: MediaLibrary.Asset | null;
+};
+
+type GalleryAssetWithDisplayTime = {
+  asset: MediaLibrary.Asset;
+  displayTime: number;
+};
+
+function mergeGalleryAssetsByDisplayTime(
+  normalAssets: MediaLibrary.Asset[],
+  downloadedAssets: MediaLibrary.Asset[],
+  downloadedRecords: DownloadedMediaRecord[],
+): MediaLibrary.Asset[] {
+  const recordsByAssetId = new Map(
+    downloadedRecords.map(record => [record.assetId, record]),
+  );
+  const assetsById = new Map<string, MediaLibrary.Asset>();
+
+  for (const asset of normalAssets) {
+    assetsById.set(asset.id, asset);
+  }
+
+  for (const asset of downloadedAssets) {
+    assetsById.set(asset.id, asset);
+  }
+
+  return Array.from(assetsById.values())
+    .map((asset): GalleryAssetWithDisplayTime => {
+      const downloadedRecord = recordsByAssetId.get(asset.id);
+
+      return {
+        asset,
+        displayTime: downloadedRecord?.savedAt ?? asset.creationTime,
+      };
+    })
+    .sort((a, b) => b.displayTime - a.displayTime)
+    .map(item => item.asset);
+}
+
+const GalleryVideoThumbnail = ({ asset }: GalleryVideoThumbnailProps) => {
+  const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadThumbnail = async () => {
+      try {
+        const assetInfo = await MediaLibrary.getAssetInfoAsync(asset.id);
+        const rawSourceUri = assetInfo.localUri ?? asset.uri;
+        const sourceUri = getUriWithoutHash(rawSourceUri);
+
+        const preparedVideo = await ensureUploadableLocalFileAsync({
+          uri: sourceUri,
+          fileName: asset.filename || `video-${asset.id}.mp4`,
+          mimeType: DEFAULT_VIDEO_MIME_TYPE,
+        });
+
+        const result = await getThumbnailAsync(preparedVideo.uri, {
+          time: VIDEO_THUMBNAIL_TIME_MS,
+        });
+
+        if (isMounted) {
+          setThumbnailUri(result.uri);
+        }
+      } catch (error) {
+        console.warn("[GalleryVideoThumbnail] Failed to create thumbnail", {
+          assetId: asset.id,
+          assetUri: asset.uri,
+          error,
+        });
+
+        if (isMounted) {
+          setThumbnailUri(null);
+        }
+      }
+    };
+
+    loadThumbnail();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [asset.id, asset.uri, asset.filename]);
+
+  return (
+    <View style={styles.galleryVideoFallback}>
+      {thumbnailUri ? (
+        <Image source={thumbnailUri}  style={styles.galleryVideoThumbnail} contentFit="cover" />
+      ) : (
+        <View style={styles.galleryVideoPlaceholder} />
+      )}
+
+      <View style={styles.galleryVideoPlayOverlay}>
+        <Ionicons name="play-circle" size={38} color={Colors.white} />
+      </View>
+
+      <View style={styles.galleryVideoDurationBadge}>
+        <Text style={styles.galleryVideoDurationText}>
+          {Math.floor(asset.duration / 60)}:
+          {Math.floor(asset.duration % 60).toString().padStart(2, "0")}
+        </Text>
+      </View>
+    </View>
+  );
+};
 
 export const AttachmentModal = ({
   visible,
   onClose,
   onSendMedia,
+  onSendVideo,
   contactName,
+  galleryRefreshKey = 0,
+  onSendFile,
 }: AttachmentModalProps) => {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<TabType>("Gallery");
   const [internalVisible, setInternalVisible] = useState(visible);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [assets, setAssets] = useState<MediaLibrary.Asset[]>([]);
+  const [downloadedMediaRecords, setDownloadedMediaRecords] = useState<DownloadedMediaRecord[]>([]);
+  const [downloadedAssets, setDownloadedAssets] = useState<MediaLibrary.Asset[]>([]);
   const [selectedUris, setSelectedUris] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [endCursor, setEndCursor] = useState<string | undefined>(undefined);
   const [hasNextPage, setHasNextPage] = useState(true);
   const [previewAsset, setPreviewAsset] = useState<MediaLibrary.Asset | null>(null);
+  const [previewVideo, setPreviewVideo] = useState<SelectedChatMedia | null>(null);
+  const [isPreparingVideo, setIsPreparingVideo] = useState(false);
   const [albums, setAlbums] = useState<MediaLibrary.Album[]>([]);
   const [selectedAlbum, setSelectedAlbum] = useState<MediaLibrary.Album | null>(null);
   const [isAlbumDropdownOpen, setIsAlbumDropdownOpen] = useState(false);
+  const [filterValues, setFilterValues] = useState<ImageFilterValues>(DEFAULT_FILTER_VALUES);
+  const [drawingPaths, setDrawingPaths] = useState<DrawingPath[]>([]);
+  const [currentPath, setCurrentPath] = useState<DrawingPath | null>(null);
+  const [workingUri, setWorkingUri] = useState<string | null>(null);
+  const [resolvedUri, setResolvedUri] = useState<string | null>(null);
+  const [paintColor, setPaintColor] = useState<string>(PAINT_COLORS[0]);
+  const [brushSize, setBrushSize] = useState<BrushSize>("medium");
+  const [isEraserActive, setIsEraserActive] = useState(false);
+  const [canvasLayout, setCanvasLayout] = useState({ width: 0, height: 0 });
+  const [imageLayout, setImageLayout] = useState({ x: 0, y: 0, width: 0, height: 0 });
+  const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
+  const canvasContainerRef = useRef<View>(null);
+  const editorCanvasRef = useRef<ImageEditorCanvasRef>(null);
+
+  const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
+  const galleryAssets = useMemo(
+    () => mergeGalleryAssetsByDisplayTime(assets, downloadedAssets, downloadedMediaRecords),
+    [assets, downloadedAssets, downloadedMediaRecords],
+  );
+
+  useEffect(() => {
+    if (activeTab === "File") {
+      loadRecentFiles();
+    }
+  }, [activeTab]);
+
+  const loadRecentFiles = async () => {
+    try {
+      const data = await AsyncStorage.getItem("recent_sent_files");
+
+      if (data) {
+        setRecentFiles(JSON.parse(data));
+      }
+    } catch (e) {
+      console.error("Failed to load recent files", e);
+    }
+  };
+
+  const saveRecentFile = async (file: RecentFile) => {
+    try {
+      const updated = [file, ...recentFiles.filter(f => f.uri !== file.uri)].slice(0, 10);
+      setRecentFiles(updated);
+      await AsyncStorage.setItem("recent_sent_files", JSON.stringify(updated));
+    } catch (e) {
+      console.error("Failed to save recent file", e);
+    }
+  };
+
+  const handlePickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        type: "*/*",
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        const fileInfo = {
+          id: Date.now().toString(),
+          name: asset.name,
+          uri: asset.uri,
+          mimeType: asset.mimeType,
+          size: asset.size,
+          sentAt: Date.now(),
+        };
+
+        saveRecentFile(fileInfo);
+
+        if (onSendFile) {
+          onSendFile(fileInfo);
+        }
+        onClose();
+      }
+    } catch (e) {
+      console.error("Error picking file", e);
+    }
+  };
+
+  const handleSendRecentFile = (file: RecentFile) => {
+    saveRecentFile({ ...file, sentAt: Date.now() });
+    if (onSendFile) {
+      onSendFile(file);
+    }
+    onClose();
+  };
 
   // ─── Editor State ─────────────────────────────────────────────────────────
   const [isSkiaReady, setIsSkiaReady] = useState(false);
@@ -148,19 +379,6 @@ export const AttachmentModal = ({
     };
   }, [editorMode]);
 
-  const [filterValues, setFilterValues] = useState<ImageFilterValues>(DEFAULT_FILTER_VALUES);
-  const [drawingPaths, setDrawingPaths] = useState<DrawingPath[]>([]);
-  const [currentPath, setCurrentPath] = useState<DrawingPath | null>(null);
-  const [workingUri, setWorkingUri] = useState<string | null>(null);
-  const [resolvedUri, setResolvedUri] = useState<string | null>(null);
-  const [paintColor, setPaintColor] = useState<string>(PAINT_COLORS[0]);
-  const [brushSize, setBrushSize] = useState<BrushSize>("medium");
-  const [isEraserActive, setIsEraserActive] = useState(false);
-  const [canvasLayout, setCanvasLayout] = useState({ width: 0, height: 0 });
-  const [imageLayout, setImageLayout] = useState({ x: 0, y: 0, width: 0, height: 0 });
-  const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
-  const canvasContainerRef = useRef<View>(null);
-  const editorCanvasRef = useRef<ImageEditorCanvasRef>(null);
 
   // Resolve ph:// URI to a normalized file:// URI (applies EXIF rotation, converts to standard JPEG for Skia)
   useEffect(() => {
@@ -176,7 +394,7 @@ export const AttachmentModal = ({
       try {
         const info = await MediaLibrary.getAssetInfoAsync(previewAsset.id);
         const sourceUri = info.localUri ?? previewAsset.uri;
-        
+
         const result = await ImageManipulator.manipulateAsync(
           sourceUri,
           [],
@@ -285,6 +503,8 @@ export const AttachmentModal = ({
         setSelectedUris(new Set());
         setActiveTab("Gallery");
         setPreviewAsset(null);
+        setPreviewVideo(null);
+        setIsPreparingVideo(false);
         resetEditorState();
         dragY.setValue(0);
         setInternalVisible(false);
@@ -292,8 +512,58 @@ export const AttachmentModal = ({
     }
   }, [visible, internalVisible]);
 
+  const loadDownloadedMediaAssets = useCallback(async (): Promise<void> => {
+    try {
+      const records = await getDownloadedMediaRecords();
+      const resolvedAssets = await Promise.all(
+        records.map(async (record): Promise<ResolvedDownloadedMediaAsset> => {
+          try {
+            const asset = await MediaLibrary.getAssetInfoAsync(record.assetId);
+
+            return {
+              record,
+              asset,
+            };
+          } catch {
+            return {
+              record,
+              asset: null,
+            };
+          }
+        }),
+      );
+      const missingAssetIds: string[] = [];
+      const loadedRecords: DownloadedMediaRecord[] = [];
+      const loadedAssets: MediaLibrary.Asset[] = [];
+
+      for (const item of resolvedAssets) {
+        if (item.asset) {
+          loadedRecords.push(item.record);
+          loadedAssets.push(item.asset);
+        } else {
+          missingAssetIds.push(item.record.assetId);
+        }
+      }
+
+      if (missingAssetIds.length > 0) {
+        try {
+          await removeDownloadedMediaRecords(missingAssetIds);
+        } catch (error) {
+          console.warn("Failed to remove missing downloaded media records", error);
+        }
+      }
+
+      setDownloadedMediaRecords(loadedRecords);
+      setDownloadedAssets(loadedAssets);
+    } catch (error) {
+      console.error("Failed to load downloaded media records", error);
+      setDownloadedMediaRecords([]);
+      setDownloadedAssets([]);
+    }
+  }, []);
+
   const requestMediaPermissions = async () => {
-    const { status } = await MediaLibrary.requestPermissionsAsync();
+    const { status } = await MediaLibrary.requestPermissionsAsync(false, ["photo", "video"]);
     setHasPermission(status === "granted");
     if (status === "granted") {
       fetchPhotos(null);
@@ -303,19 +573,22 @@ export const AttachmentModal = ({
     }
   };
 
-  const fetchPhotos = async (album: MediaLibrary.Album | null = selectedAlbum) => {
+  const fetchPhotos = useCallback(async (album: MediaLibrary.Album | null = selectedAlbum) => {
     setIsLoading(true);
     setAssets([]);
     setEndCursor(undefined);
     setHasNextPage(true);
 
     try {
-      const result = await MediaLibrary.getAssetsAsync({
-        mediaType: "photo",
-        first: PAGE_SIZE,
-        sortBy: ["creationTime"],
-        ...(album ? { album: album.id } : {}),
-      });
+      const [result] = await Promise.all([
+        MediaLibrary.getAssetsAsync({
+          mediaType: ["photo", "video"],
+          first: PAGE_SIZE,
+          sortBy: [[MediaLibrary.SortBy.creationTime, false]],
+          ...(album ? { album: album.id } : {}),
+        }),
+        loadDownloadedMediaAssets(),
+      ]);
 
       setAssets(result.assets);
       setEndCursor(result.endCursor);
@@ -325,7 +598,7 @@ export const AttachmentModal = ({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [loadDownloadedMediaAssets, selectedAlbum]);
 
   useEffect(() => {
     if (hasPermission) {
@@ -337,7 +610,13 @@ export const AttachmentModal = ({
         subscription.remove();
       };
     }
-  }, [hasPermission, selectedAlbum]);
+  }, [fetchPhotos, hasPermission, selectedAlbum]);
+
+  useEffect(() => {
+    if (visible && hasPermission && activeTab === "Gallery") {
+      fetchPhotos(selectedAlbum);
+    }
+  }, [activeTab, fetchPhotos, galleryRefreshKey, hasPermission, selectedAlbum, visible]);
 
   const fetchMorePhotos = async () => {
     if (isLoadingMore || !hasNextPage || !endCursor) return;
@@ -345,10 +624,10 @@ export const AttachmentModal = ({
 
     try {
       const result = await MediaLibrary.getAssetsAsync({
-        mediaType: "photo",
+        mediaType: ["photo", "video"],
         first: PAGE_SIZE,
         after: endCursor,
-        sortBy: ["creationTime"],
+        sortBy: [[MediaLibrary.SortBy.creationTime, false]],
         ...(selectedAlbum ? { album: selectedAlbum.id } : {}),
       });
 
@@ -466,7 +745,6 @@ export const AttachmentModal = ({
   }, [previewAsset, workingUri, selectedUris, hasEdits, exportEditedImage, onSendMedia, onClose]);
 
 
-
   const handleBackFromPreview = useCallback(() => {
     setPreviewAsset(null);
     resetEditorState();
@@ -519,15 +797,15 @@ export const AttachmentModal = ({
         // Map existing drawings to the new cropped coordinate system
         const ox = Math.round(region.originX * imgWidth);
         const oy = Math.round(region.originY * imgHeight);
-        
+
         const shiftedPaths = drawingPaths.map(drawPath => {
           const newPath = Skia.Path.MakeFromSVGString(drawPath.path.toSVGString());
           if (!newPath) return drawPath;
-          
+
           const matrix = Skia.Matrix();
           matrix.translate(-ox, -oy);
           newPath.transform(matrix);
-          
+
           return { ...drawPath, path: newPath };
         });
 
@@ -593,10 +871,10 @@ export const AttachmentModal = ({
   const handlePaintTouchStart = useCallback(
     (locationX: number, locationY: number) => {
       if (editorMode !== "paint" || !imageDimensions) return;
-      
+
       const layout = computeContainedImageLayout(0, 0, canvasLayout.width, canvasLayout.height);
       const scale = imageDimensions.width / layout.width;
-      
+
       const clampedX = Math.max(layout.x, Math.min(locationX, layout.x + layout.width));
       const clampedY = Math.max(layout.y, Math.min(locationY, layout.y + layout.height));
 
@@ -619,10 +897,10 @@ export const AttachmentModal = ({
   const handlePaintTouchMove = useCallback(
     (locationX: number, locationY: number) => {
       if (editorMode !== "paint" || !currentPath || !imageDimensions) return;
-      
+
       const layout = computeContainedImageLayout(0, 0, canvasLayout.width, canvasLayout.height);
       const scale = imageDimensions.width / layout.width;
-      
+
       const clampedX = Math.max(layout.x, Math.min(locationX, layout.x + layout.width));
       const clampedY = Math.max(layout.y, Math.min(locationY, layout.y + layout.height));
 
@@ -643,6 +921,59 @@ export const AttachmentModal = ({
     }
   }, [currentPath]);
 
+  const getLocalFileSize = useCallback((uri: string): number | undefined => {
+    try {
+      const file = new FileSystem.File(uri);
+      const info = file.info();
+      return info.exists ? info.size : undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const handleOpenVideoPreview = useCallback(async (asset: MediaLibrary.Asset) => {
+    try {
+      setIsPreparingVideo(true);
+      const info = await MediaLibrary.getAssetInfoAsync(asset.id);
+      const sourceUri = info.localUri ?? asset.uri;
+      const sourceUriWithoutHash = getUriWithoutHash(sourceUri);
+
+      const uploadableVideo = await ensureUploadableLocalFileAsync({
+        uri: sourceUriWithoutHash,
+        fileName: asset.filename,
+        mimeType: DEFAULT_VIDEO_MIME_TYPE,
+      });
+
+      setPreviewVideo({
+        uri: uploadableVideo.uri,
+        type: "video",
+        fileName: uploadableVideo.fileName,
+        mimeType: uploadableVideo.mimeType,
+        width: asset.width,
+        height: asset.height,
+        duration: Math.round(asset.duration * VIDEO_DURATION_MS_MULTIPLIER),
+        fileSize: uploadableVideo.size ?? getLocalFileSize(uploadableVideo.uri),
+      });
+    } catch (error) {
+      console.error("Failed to prepare video preview", error);
+      Alert.alert("Video Error", "Could not prepare this video for preview.");
+    } finally {
+      setIsPreparingVideo(false);
+    }
+  }, [getLocalFileSize]);
+
+  const handleSendVideoPreview = useCallback(
+    async (video: SelectedChatMedia) => {
+      if (!onSendVideo) {
+        return;
+      }
+
+      await onSendVideo(video);
+      setPreviewVideo(null);
+      onClose();
+    },
+    [onClose, onSendVideo],
+  );
 
   const handleCanvasContainerLayout = useCallback((e: LayoutChangeEvent) => {
     const { width: w, height: h } = e.nativeEvent.layout;
@@ -670,22 +1001,39 @@ export const AttachmentModal = ({
       );
     }
 
+    const isVideo = item.mediaType === "video";
     const isSelected = selectedUris.has(item.uri);
 
     return (
-      <Pressable style={styles.galleryItem} onPress={() => setPreviewAsset(item)}>
-        <Image source={item.uri} style={styles.galleryImage} contentFit="cover" />
+      <Pressable
+        style={styles.galleryItem}
+        onPress={() => {
+          if (isVideo) {
+            handleOpenVideoPreview(item);
+            return;
+          }
+
+          setPreviewAsset(item);
+        }}
+      >
+        {isVideo ? (
+          <GalleryVideoThumbnail asset={item} />
+        ) : (
+          <Image source={item.uri} style={styles.galleryImage} contentFit="cover" />
+        )}
         {isSelected && <View style={styles.selectedDimOverlay} />}
         {/* Select circle — top-right corner */}
-        <Pressable
-          style={styles.selectCircleWrapper}
-          onPress={() => toggleSelection(item.uri)}
-          hitSlop={8}
-        >
-          <View style={[styles.selectCircle, isSelected && styles.selectCircleFilled]}>
-            {isSelected && <Ionicons name="checkmark" size={14} color={Colors.white} />}
-          </View>
-        </Pressable>
+        {!isVideo && (
+          <Pressable
+            style={styles.selectCircleWrapper}
+            onPress={() => toggleSelection(item.uri)}
+            hitSlop={8}
+          >
+            <View style={[styles.selectCircle, isSelected && styles.selectCircleFilled]}>
+              {isSelected && <Ionicons name="checkmark" size={14} color={Colors.white} />}
+            </View>
+          </Pressable>
+        )}
       </Pressable>
     );
   };
@@ -696,7 +1044,7 @@ export const AttachmentModal = ({
       return (
         <View style={styles.permissionContainer}>
           <Text style={styles.permissionText}>
-            Photo library permission is required to view and send photos.
+            Photo library permission is required to view and send photos and videos.
           </Text>
           <Pressable style={styles.permissionButton} onPress={requestMediaPermissions}>
             <Text style={styles.permissionButtonText}>Allow Access</Text>
@@ -705,7 +1053,7 @@ export const AttachmentModal = ({
       );
     }
 
-    if (isLoading && assets.length === 0) {
+    if (isLoading && galleryAssets.length === 0) {
       return (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={Colors.primary} />
@@ -713,7 +1061,7 @@ export const AttachmentModal = ({
       );
     }
 
-    const data: (MediaLibrary.Asset | "camera")[] = ["camera", ...assets];
+    const data: (MediaLibrary.Asset | "camera")[] = ["camera", ...galleryAssets];
 
     return (
       <View style={styles.galleryContainer}>
@@ -737,13 +1085,45 @@ export const AttachmentModal = ({
       </View>
     );
   };
+  const renderFiles = () => {
+    return (
+      <View style={styles.filesContainer}>
+        <View style={styles.filesHeader}>
+          <Pressable style={styles.chooseFileButton} onPress={handlePickFile}>
+            <Ionicons name="document-text" size={24} color={Colors.white} style={styles.chooseFileIcon} />
+            <Text style={styles.chooseFileText}>Choose from Files</Text>
+          </Pressable>
+        </View>
 
-  const renderPlaceholder = (title: string, icon: keyof typeof Ionicons.glyphMap) => (
-    <View style={styles.placeholderContainer}>
-      <Ionicons name={icon} size={64} color={Colors.border} />
-      <Text style={styles.placeholderText}>{title} coming soon</Text>
-    </View>
-  );
+        <Text style={styles.recentFilesTitle}>Recently sent</Text>
+
+        {recentFiles.length === 0 ? (
+          <View style={styles.emptyRecentContainer}>
+            <Ionicons name="time-outline" size={48} color={Colors.border} />
+            <Text style={styles.emptyRecentText}>No recently sent files</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={recentFiles}
+            keyExtractor={item => item.id}
+            renderItem={({ item }) => (
+              <Pressable style={styles.recentFileRow} onPress={() => handleSendRecentFile(item)}>
+                <View style={styles.recentFileIconContainer}>
+                  <Ionicons name={getFileIconByMimeType(item.mimeType, item.name)} size={24} color={Colors.white} />
+                </View>
+                <View style={styles.recentFileDetails}>
+                  <Text style={styles.recentFileName} numberOfLines={1}>{item.name}</Text>
+                  <Text style={styles.recentFileSize}>{formatFileSize(item.size)}</Text>
+                </View>
+              </Pressable>
+            )}
+            contentContainerStyle={styles.recentFilesList}
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+      </View>
+    );
+  };
 
   if (!internalVisible) return null;
 
@@ -795,8 +1175,6 @@ export const AttachmentModal = ({
                   </Pressable>
                 ) : activeTab === "File" ? (
                   <Text style={styles.sheetHeaderTitle}>File</Text>
-                ) : activeTab === "Canvas" ? (
-                  <Text style={styles.sheetHeaderTitle}>Canvas</Text>
                 ) : null}
               </View>
 
@@ -807,16 +1185,14 @@ export const AttachmentModal = ({
 
           <View style={styles.contentContainer}>
             {activeTab === "Gallery" && renderGallery()}
-            {activeTab === "File" && renderPlaceholder("File Sharing", "document-text")}
-            {activeTab === "Canvas" && renderPlaceholder("Canvas", "color-palette")}
+            {activeTab === "File" && renderFiles()}
           </View>
 
           <View style={styles.tabBar}>
-            {(["Gallery", "File", "Canvas"] as const).map(tab => {
+            {(["Gallery", "File"] as const).map(tab => {
               const iconMap: Record<TabType, keyof typeof Ionicons.glyphMap> = {
                 Gallery: "image",
                 File: "document",
-                Canvas: "brush",
               };
               return (
                 <Pressable
@@ -886,6 +1262,12 @@ export const AttachmentModal = ({
             </View>
           )}
         </Animated.View>
+
+        {isPreparingVideo && (
+          <View style={styles.videoPreparingOverlay}>
+            <ActivityIndicator size="large" color={Colors.white} />
+          </View>
+        )}
 
         {/* Full-screen preview — rendered inside the Modal so it stacks correctly on iOS */}
         {previewAsset !== null && (
@@ -970,9 +1352,9 @@ export const AttachmentModal = ({
             {/* Editor tools area — hidden during crop mode (crop has its own buttons) */}
             {editorMode !== "crop" && (
               <View style={[styles.previewEditorArea, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-                
-                <Reanimated.View 
-                  style={[styles.toolsPanel, toolsAnimatedStyle]} 
+
+                <Reanimated.View
+                  style={[styles.toolsPanel, toolsAnimatedStyle]}
                   pointerEvents={isToolsActive ? "auto" : "none"}
                 >
                   {/* Paint toolbar */}
@@ -1025,6 +1407,17 @@ export const AttachmentModal = ({
             )}
           </View>
         )}
+
+        <VideoPreviewModal
+          visible={previewVideo !== null}
+          video={previewVideo}
+          title={contactName}
+          showTrimControls
+          autoPlay={false}
+          showSendButton
+          onClose={() => setPreviewVideo(null)}
+          onSend={onSendVideo ? handleSendVideoPreview : undefined}
+        />
       </View>
     </Modal>
   );
@@ -1039,6 +1432,12 @@ const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  videoPreparingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.45)",
   },
   bottomSheet: {
     backgroundColor: Colors.background,
@@ -1188,6 +1587,39 @@ const styles = StyleSheet.create({
   },
   galleryImage: {
     flex: 1,
+  },
+  galleryVideoFallback: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#111827",
+  },
+  galleryVideoThumbnail: {
+  ...StyleSheet.absoluteFillObject,
+},
+  galleryVideoPlaceholder: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#263244",
+  },
+  galleryVideoPlayOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.12)",
+  },
+  galleryVideoDurationBadge: {
+    position: "absolute",
+    right: 6,
+    bottom: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+  galleryVideoDurationText: {
+    color: Colors.white,
+    fontSize: 11,
+    fontWeight: "700",
   },
   selectedDimOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1390,5 +1822,83 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: 16,
     fontWeight: "700",
+  },
+  filesContainer: {
+    flex: 1,
+    paddingTop: 16,
+  },
+  filesHeader: {
+    paddingHorizontal: 16,
+    marginBottom: 24,
+  },
+  chooseFileButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  chooseFileIcon: {
+    marginRight: 8,
+  },
+  chooseFileText: {
+    color: Colors.white,
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  recentFilesTitle: {
+    color: Colors.textSecondary,
+    fontSize: 14,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  recentFilesList: {
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+  },
+  recentFileRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  recentFileIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: Colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  recentFileDetails: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  recentFileName: {
+    color: Colors.textPrimary,
+    fontSize: 15,
+    fontWeight: "500",
+    marginBottom: 4,
+  },
+  recentFileSize: {
+    color: Colors.textSecondary,
+    fontSize: 13,
+  },
+  emptyRecentContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 40,
+  },
+  emptyRecentText: {
+    color: Colors.textSecondary,
+    fontSize: 15,
+    marginTop: 12,
   },
 });

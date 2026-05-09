@@ -73,8 +73,8 @@ export default {
       [
         "expo-media-library",
         {
-          "photosPermission": "Allow e-messanger to access your photos.",
-          "savePhotosPermission": "Allow e-messanger to save photos.",
+          "photosPermission": "Allow e-messanger to access your photos and videos.",
+          "savePhotosPermission": "Allow e-messanger to save photos and videos.",
           "isAccessMediaLocationEnabled": true
         }
       ],
@@ -84,7 +84,8 @@ export default {
           "photosPermission": "Allow e-messanger to access your photos.",
           "cameraPermission": "Allow e-messanger to access your camera."
         }
-      ]
+      ],
+      "expo-video"
     ],
     experiments: {
       typedRoutes: true,
