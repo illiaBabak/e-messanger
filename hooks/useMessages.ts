@@ -16,6 +16,7 @@ import {
 } from "@react-native-firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import type { ChatVideo, SelectedChatMedia } from "@/types/chatMedia";
+import { compressVideoForUploadAsync, type VideoCompressionResult } from "@/utils/videoCompression";
 import { firestore } from "../services/firebase";
 import { uploadFileMessage, uploadImageMessage, uploadVideoMessage, uploadVoiceMessage } from "../services/storage";
 
@@ -93,6 +94,9 @@ function getChatVideoFromFirestore(value: unknown): ChatVideo | undefined {
   const duration = getOptionalNumber(value.duration);
   const width = getOptionalNumber(value.width);
   const height = getOptionalNumber(value.height);
+  const originalSize = getOptionalNumber(value.originalSize);
+  const compressedSize = getOptionalNumber(value.compressedSize);
+  const compressionRatio = getOptionalNumber(value.compressionRatio);
 
   return {
     mediaType: "video",
@@ -103,6 +107,9 @@ function getChatVideoFromFirestore(value: unknown): ChatVideo | undefined {
     ...(duration !== undefined && { duration }),
     ...(width !== undefined && { width }),
     ...(height !== undefined && { height }),
+    ...(originalSize !== undefined && { originalSize }),
+    ...(compressedSize !== undefined && { compressedSize }),
+    ...(compressionRatio !== undefined && { compressionRatio }),
   };
 }
 
@@ -116,6 +123,27 @@ function buildChatVideoPayload(videoInfo: SelectedChatMedia, url: string): ChatV
     ...(videoInfo.duration !== undefined && { duration: videoInfo.duration }),
     ...(videoInfo.width !== undefined && { width: videoInfo.width }),
     ...(videoInfo.height !== undefined && { height: videoInfo.height }),
+    ...(videoInfo.originalFileSize !== undefined && { originalSize: videoInfo.originalFileSize }),
+    ...(videoInfo.compressedFileSize !== undefined && { compressedSize: videoInfo.compressedFileSize }),
+    ...(videoInfo.compressionRatio !== undefined && { compressionRatio: videoInfo.compressionRatio }),
+  };
+}
+
+function buildCompressedVideoInfo(
+  videoInfo: SelectedChatMedia,
+  compressionResult: VideoCompressionResult,
+): SelectedChatMedia {
+  return {
+    ...videoInfo,
+    uri: compressionResult.uri,
+    fileName: compressionResult.fileName,
+    mimeType: compressionResult.mimeType,
+    fileSize: compressionResult.size,
+    originalFileSize: compressionResult.originalSize,
+    ...(compressionResult.wasCompressed && {
+      compressedFileSize: compressionResult.compressedSize,
+      compressionRatio: compressionResult.compressionRatio,
+    }),
   };
 }
 
@@ -315,13 +343,21 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
       }
 
       let videoUrl;
+      let uploadVideoInfo = videoInfo;
       if (videoInfo) {
+        const compressionResult = await compressVideoForUploadAsync({
+          uri: videoInfo.uri,
+          fileName: videoInfo.fileName,
+          mimeType: videoInfo.mimeType,
+        });
+
+        uploadVideoInfo = buildCompressedVideoInfo(videoInfo, compressionResult);
         videoUrl = await uploadVideoMessage(
-          videoInfo.uri,
+          uploadVideoInfo.uri,
           chatId,
           newMessageRef.id,
-          videoInfo.fileName,
-          videoInfo.mimeType ?? DEFAULT_VIDEO_MIME_TYPE,
+          uploadVideoInfo.fileName,
+          uploadVideoInfo.mimeType ?? DEFAULT_VIDEO_MIME_TYPE,
         );
       }
 
@@ -347,8 +383,8 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
             size: fileInfo.size,
           }
         }),
-        ...(videoInfo && videoUrl && {
-          video: buildChatVideoPayload(videoInfo, videoUrl),
+        ...(uploadVideoInfo && videoUrl && {
+          video: buildChatVideoPayload(uploadVideoInfo, videoUrl),
         }),
       };
 
@@ -361,7 +397,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         {
           participants: [currentUserId, contactId],
           lastMessage: {
-            text: getMessagePreviewText({ text: text.trim(), audio: audioInfo, images: imageUrls, file: fileInfo, video: videoInfo }),
+            text: getMessagePreviewText({ text: text.trim(), audio: audioInfo, images: imageUrls, file: fileInfo, video: uploadVideoInfo }),
             senderId: currentUserId,
             createdAt: serverTimestamp(),
           },

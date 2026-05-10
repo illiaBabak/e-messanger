@@ -3,12 +3,15 @@ import { BlurView } from "expo-blur";
 import { Image } from "expo-image";
 import { getThumbnailAsync } from "expo-video-thumbnails";
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Animated, Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Colors } from "@/constants/theme";
+import { MediaHighlightFrame } from "./MediaHighlightFrame";
 
 const { width } = Dimensions.get("window");
-const VIDEO_MAX_WIDTH = width * 0.55;
+const VIDEO_MAX_WIDTH_RATIO = 0.58;
+const VIDEO_PREVIEW_ASPECT_RATIO = 0.76;
+const VIDEO_MAX_WIDTH = width * VIDEO_MAX_WIDTH_RATIO;
 const THUMBNAIL_TIME_MS = 1000;
 
 export type MessageLayout = {
@@ -26,6 +29,7 @@ export type VideoMessageProps = {
   duration?: number;
   status?: "sending" | "sent" | "error" | "read";
   isRead?: boolean;
+  highlightOpacity?: Animated.Value;
   onPress: () => void;
   onLongPress: (layout: MessageLayout) => void;
 };
@@ -50,12 +54,15 @@ export const VideoMessage = ({
   duration,
   status,
   isRead,
+  highlightOpacity,
   onPress,
   onLongPress,
 }: VideoMessageProps) => {
   const containerRef = useRef<View>(null);
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const [isThumbnailLoading, setIsThumbnailLoading] = useState(false);
+  const isSending = status === "sending";
+  const isCardLoading = isSending || isThumbnailLoading;
 
   useEffect(() => {
     let isMounted = true;
@@ -104,58 +111,67 @@ export const VideoMessage = ({
         onPress={onPress}
         onLongPress={handleLongPress}
         delayLongPress={250}
-        style={[styles.container, isMe ? styles.containerMe : styles.containerFriend]}
+        style={styles.container}
       >
-        <View style={styles.preview}>
-          {thumbnailUri ? (
+        <MediaHighlightFrame
+          isMe={isMe}
+          highlightOpacity={highlightOpacity}
+          style={styles.mediaHighlightOuter}
+          clipStyle={styles.preview}
+        >
+          {thumbnailUri && !isCardLoading ? (
             <Image source={thumbnailUri} style={styles.thumbnail} contentFit="cover" />
-          ) : (
+          ) : null}
+
+          {!thumbnailUri && !isCardLoading ? (
             <View style={styles.fallbackPreview}>
               <Ionicons name="videocam" size={32} color="rgba(255,255,255,0.82)" />
               <Text style={styles.fallbackText} numberOfLines={1}>
                 Video
               </Text>
             </View>
-          )}
-          <View style={styles.playOverlay}>
-            {isThumbnailLoading ? (
+          ) : null}
+
+          {isCardLoading ? (
+            <View style={styles.loadingPreview}>
               <ActivityIndicator size="small" color={Colors.white} />
-            ) : (
-              <Ionicons name="play-circle" size={54} color={Colors.white} />
-            )}
-          </View>
-          <View style={styles.videoBadge}>
-            <Ionicons name="videocam" size={14} color={Colors.white} />
-            <Text style={styles.durationText}>{formatDuration(duration)}</Text>
-          </View>
-        </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.playOverlay}>
+                <Ionicons name="play-circle" size={54} color={Colors.white} />
+              </View>
 
-        <View style={styles.fileNameOverlay}>
-          <Text style={styles.fileNameText} numberOfLines={1}>
-            {fileName}
-          </Text>
-        </View>
+              <View style={styles.videoBadge}>
+                <Ionicons name="videocam" size={14} color={Colors.white} />
+                <Text style={styles.durationText}>{formatDuration(duration)}</Text>
+              </View>
+            </>
+          )}
 
-        {status === "sending" && (
-          <View style={styles.sendingOverlay}>
-            <ActivityIndicator size="small" color={Colors.white} />
-          </View>
-        )}
+          {!isCardLoading ? (
+            <View style={styles.fileNameOverlay}>
+              <Text style={styles.fileNameText} numberOfLines={1}>
+                {fileName}
+              </Text>
+            </View>
+          ) : null}
 
-        <View style={styles.timeOverlayContainer}>
-          <BlurView intensity={30} tint="dark" style={styles.timeBlur} />
-          <View style={styles.timeContent}>
-            <Text style={styles.timeText}>{timeStr}</Text>
-            {isMe && status !== "sending" && (
-              <Ionicons
-                name={isRead ? "checkmark-done" : "checkmark"}
-                size={14}
-                color={isRead ? "#4CAF50" : Colors.white}
-                style={styles.checkmark}
-              />
-            )}
+          <View style={styles.timeOverlayContainer}>
+            <BlurView intensity={30} tint="dark" style={styles.timeBlur} />
+            <View style={styles.timeContent}>
+              <Text style={styles.timeText}>{timeStr}</Text>
+              {isMe && status !== "sending" && (
+                <Ionicons
+                  name={isRead ? "checkmark-done" : "checkmark"}
+                  size={14}
+                  color={isRead ? "#4CAF50" : Colors.white}
+                  style={styles.checkmark}
+                />
+              )}
+            </View>
           </View>
-        </View>
+        </MediaHighlightFrame>
       </Pressable>
     </View>
   );
@@ -164,21 +180,12 @@ export const VideoMessage = ({
 const styles = StyleSheet.create({
   container: {
     maxWidth: VIDEO_MAX_WIDTH,
-    borderRadius: 16,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.1)",
-    backgroundColor: "#111827",
   },
-  containerMe: {
-    borderBottomRightRadius: 4,
-  },
-  containerFriend: {
-    borderBottomLeftRadius: 4,
+  mediaHighlightOuter: {
+    width: VIDEO_MAX_WIDTH,
+    aspectRatio: VIDEO_PREVIEW_ASPECT_RATIO,
   },
   preview: {
-    width: VIDEO_MAX_WIDTH,
-    aspectRatio: 0.8,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#263244",
@@ -204,6 +211,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(0,0,0,0.12)",
+  },
+  loadingPreview: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#263244",
   },
   videoBadge: {
     position: "absolute",
@@ -236,12 +249,6 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: 12,
     fontWeight: "600",
-  },
-  sendingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.35)",
-    justifyContent: "center",
-    alignItems: "center",
   },
   timeOverlayContainer: {
     position: "absolute",

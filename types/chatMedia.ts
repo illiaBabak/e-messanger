@@ -9,6 +9,9 @@ export type SelectedChatMedia = {
   height?: number;
   duration?: number;
   fileSize?: number;
+  originalFileSize?: number;
+  compressedFileSize?: number;
+  compressionRatio?: number;
 };
 
 export type VideoTrimRange = {
@@ -25,4 +28,7 @@ export type ChatVideo = {
   duration?: number;
   width?: number;
   height?: number;
+  originalSize?: number;
+  compressedSize?: number;
+  compressionRatio?: number;
 };

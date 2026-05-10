@@ -42,6 +42,10 @@ import { saveDownloadedMediaRecord, type DownloadedMediaRecord } from "@/utils/d
 import { downloadVideoToLibraryAsync } from "@/utils/downloadVideoToLibrary";
 
 const VIDEO_PREVIEW_URI_PATTERN = /^(https?:\/\/|file:\/\/)/i;
+const MESSAGE_HIGHLIGHT_DELAY_MS = 50;
+const VIDEO_SEND_FALLBACK_ERROR_MESSAGE = "Could not send video.";
+
+type DownloadingMediaType = "photo" | "video";
 
 function isValidVideoPreviewUri(uri: string): boolean {
   return VIDEO_PREVIEW_URI_PATTERN.test(uri.trim());
@@ -53,6 +57,18 @@ function getDownloadErrorMessage(error: unknown): string {
   }
 
   return "Could not download video.";
+}
+
+function getVideoSendErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  return VIDEO_SEND_FALLBACK_ERROR_MESSAGE;
+}
+
+function getDownloadStatusText(type: DownloadingMediaType): string {
+  return type === "photo" ? "Saving image..." : "Saving video...";
 }
 
 async function saveDownloadedMediaRecordSafely(
@@ -156,6 +172,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
               timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               status={item.status}
               isRead={item.isRead}
+              highlightOpacity={highlightOpacity}
               onPress={handleImagePress}
               onLongPress={(layout) => onLongPress(item, layout)}
            />
@@ -185,6 +202,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
             timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
             status={item.status}
             isRead={item.isRead}
+            highlightOpacity={highlightOpacity}
             onPress={handleVideoPress}
             onLongPress={(layout) => onLongPress(item, layout)}
           />
@@ -304,6 +322,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
               timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               status={item.status}
               isRead={item.isRead}
+              highlightOpacity={highlightOpacity}
               onPress={handleVideoPress}
               onLongPress={(layout) => onLongPress(item, layout)}
             />
@@ -405,12 +424,16 @@ export default function ChatScreen() {
   const activePinnedMessage = pinnedMessages.length > 0 ? pinnedMessages[activePinnedIndex % pinnedMessages.length] : null;
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
 
+  const triggerMessageHighlight = useCallback((messageId: string) => {
+    setHighlightedMessageId(null);
+    setTimeout(() => setHighlightedMessageId(messageId), MESSAGE_HIGHLIGHT_DELAY_MS);
+  }, []);
+
   const scrollToMessageId = (messageId: string) => {
     const indexInMessages = messages.findIndex(m => m.id === messageId);
     if (indexInMessages !== -1) {
       flatListRef.current?.scrollToIndex({ index: indexInMessages, animated: true, viewPosition: 0.5 });
-      setHighlightedMessageId(null);
-      setTimeout(() => setHighlightedMessageId(messageId), 50);
+      triggerMessageHighlight(messageId);
     }
   };
 
@@ -457,13 +480,27 @@ export default function ChatScreen() {
   const [previewImage, setPreviewImage] = useState<{ url: string, name: string, time: string, message: Message } | null>(null);
   const [previewVideo, setPreviewVideo] = useState<{ video: ChatVideo, name: string, time: string, message: Message } | null>(null);
   const [galleryRefreshKey, setGalleryRefreshKey] = useState(0);
+  const [downloadingMediaType, setDownloadingMediaType] = useState<DownloadingMediaType | null>(null);
+  const downloadInProgressRef = useRef(false);
+  const isMediaDownloading = downloadingMediaType !== null;
+  const downloadStatusText = downloadingMediaType ? getDownloadStatusText(downloadingMediaType) : null;
 
   const handleDownloadImage = async (url: string) => {
+    closeMenu();
+
+    const imageUrl = url.trim();
+    if (imageUrl.length === 0 || downloadInProgressRef.current) {
+      return;
+    }
+
+    downloadInProgressRef.current = true;
+    setDownloadingMediaType("photo");
+
     try {
-      let fileUri = url;
-      if (url.startsWith('http')) {
+      let fileUri = imageUrl;
+      if (imageUrl.startsWith("http")) {
         const downloadFile = new FileSystem.File(FileSystem.Paths.cache, `downloaded_img_${Date.now()}.jpg`);
-        const file = await FileSystem.File.downloadFileAsync(url, downloadFile);
+        const file = await FileSystem.File.downloadFileAsync(imageUrl, downloadFile);
         fileUri = file.uri;
       }
       const asset = await MediaLibrary.createAssetAsync(fileUri);
@@ -475,14 +512,24 @@ export default function ChatScreen() {
       });
       setGalleryRefreshKey(previousKey => previousKey + 1);
       showToast("Image saved to gallery");
-      closeMenu();
     } catch {
       Alert.alert("Error", "Could not download image");
-      closeMenu();
+    } finally {
+      downloadInProgressRef.current = false;
+      setDownloadingMediaType(null);
     }
   };
 
   const handleDownloadVideo = async (video: ChatVideo) => {
+    closeMenu();
+
+    if (downloadInProgressRef.current) {
+      return;
+    }
+
+    downloadInProgressRef.current = true;
+    setDownloadingMediaType("video");
+
     try {
       const result = await downloadVideoToLibraryAsync({
         uri: video.url,
@@ -498,11 +545,12 @@ export default function ChatScreen() {
       });
       setGalleryRefreshKey(previousKey => previousKey + 1);
       showToast("Video saved to gallery");
-      closeMenu();
     } catch (error) {
       console.error("Failed to download video", error);
       Alert.alert("Video Download Failed", getDownloadErrorMessage(error));
-      closeMenu();
+    } finally {
+      downloadInProgressRef.current = false;
+      setDownloadingMediaType(null);
     }
   };
 
@@ -693,6 +741,7 @@ export default function ChatScreen() {
         text: getMessagePreviewText(selectedMessage),
         senderId: selectedMessage.senderId,
       });
+      triggerMessageHighlight(selectedMessage.id);
       closeMenu();
     }
   };
@@ -791,7 +840,7 @@ export default function ChatScreen() {
         await sendMessage("", undefined, undefined, undefined, undefined, video);
       } catch (error) {
         console.error("Failed to send video:", error);
-        Alert.alert("Error", "Could not send video.");
+        Alert.alert("Video Error", getVideoSendErrorMessage(error));
         throw error;
       }
     },
@@ -1007,6 +1056,13 @@ export default function ChatScreen() {
         </Animated.View>
       )}
 
+      {downloadStatusText ? (
+        <View style={[styles.downloadStatusContainer, { bottom: insets.bottom + 100 }]} pointerEvents="none">
+          <ActivityIndicator size="small" color={Colors.white} />
+          <Text style={styles.downloadStatusText}>{downloadStatusText}</Text>
+        </View>
+      ) : null}
+
       </ImageBackground>
 
       {/* Context Menu Modal */}
@@ -1174,9 +1230,19 @@ export default function ChatScreen() {
                       <Ionicons name="arrow-undo-outline" size={20} color={Colors.textPrimary} />
                       <Text style={styles.menuItemText}>Reply</Text>
                     </Pressable>
-                    <Pressable style={styles.menuItem} onPress={() => handleDownloadImage(selectedMessage.images?.[0] ?? "")}>
-                      <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
-                      <Text style={styles.menuItemText}>Download</Text>
+                    <Pressable
+                      style={[styles.menuItem, isMediaDownloading && styles.menuItemDisabled]}
+                      onPress={() => handleDownloadImage(selectedMessage.images?.[0] ?? "")}
+                      disabled={isMediaDownloading}
+                    >
+                      {isMediaDownloading ? (
+                        <ActivityIndicator size="small" color={Colors.primary} />
+                      ) : (
+                        <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
+                      )}
+                      <Text style={styles.menuItemText}>
+                        {isMediaDownloading ? downloadStatusText ?? "Saving..." : "Download"}
+                      </Text>
                     </Pressable>
                     <Pressable style={styles.menuItem} onPress={handlePinAction}>
                       <Ionicons name={pinnedMessages.some(p => p.id === selectedMessage.id) ? "pin" : "pin-outline"} size={20} color={Colors.textPrimary} />
@@ -1205,15 +1271,22 @@ export default function ChatScreen() {
                     </Pressable>
                     {selectedMessage.video ? (
                       <Pressable
-                        style={styles.menuItem}
+                        style={[styles.menuItem, isMediaDownloading && styles.menuItemDisabled]}
                         onPress={() => {
                           if (selectedMessage.video) {
                             void handleDownloadVideo(selectedMessage.video);
                           }
                         }}
+                        disabled={isMediaDownloading}
                       >
-                        <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
-                        <Text style={styles.menuItemText}>Download</Text>
+                        {isMediaDownloading ? (
+                          <ActivityIndicator size="small" color={Colors.primary} />
+                        ) : (
+                          <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
+                        )}
+                        <Text style={styles.menuItemText}>
+                          {isMediaDownloading ? downloadStatusText ?? "Saving..." : "Download"}
+                        </Text>
                       </Pressable>
                     ) : null}
                     {!selectedMessage.audio && !selectedMessage.video && !selectedMessage.file && selectedMessage.text && selectedMessage.senderId === user?.uid && (
@@ -1291,6 +1364,8 @@ export default function ChatScreen() {
         contactName={previewImage?.name || ""}
         timeStr={previewImage?.time || ""}
         onClose={() => setPreviewImage(null)}
+        isDownloadInProgress={isMediaDownloading}
+        downloadStatusText={downloadStatusText ?? undefined}
         onReply={() => {
           if (previewImage) {
             handleReplyAction(previewImage.message);
@@ -1326,6 +1401,8 @@ export default function ChatScreen() {
         showActionsMenu
         showSendButton={false}
         actions={{
+          isDownloadInProgress: isMediaDownloading,
+          downloadStatusText: downloadStatusText ?? undefined,
           onDownload: () => {
             if (previewVideo) {
               void handleDownloadVideo(previewVideo.video);
@@ -1608,6 +1685,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 16,
   },
+  menuItemDisabled: {
+    opacity: 0.55,
+  },
   menuItemText: {
     fontSize: FontSizes.md,
     color: Colors.textPrimary,
@@ -1856,6 +1936,23 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: 14,
     fontWeight: "500",
+  },
+  downloadStatusContainer: {
+    position: "absolute",
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(0,0,0,0.72)",
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    borderRadius: 20,
+    zIndex: 101,
+  },
+  downloadStatusText: {
+    color: Colors.white,
+    fontSize: 14,
+    fontWeight: "600",
   },
   imageGrid: {
     flexDirection: "row",

@@ -67,6 +67,11 @@ const COLUMN_COUNT = 3;
 const ITEM_MARGIN = 2;
 const ITEM_SIZE = (width - ITEM_MARGIN * (COLUMN_COUNT - 1)) / COLUMN_COUNT;
 const PAGE_SIZE = 60;
+const GALLERY_SKELETON_ITEM_COUNT = 15;
+const GALLERY_SKELETON_ITEMS = Array.from(
+  { length: GALLERY_SKELETON_ITEM_COUNT },
+  (_item, index) => `gallery-skeleton-${index}`,
+);
 
 type AttachmentModalProps = {
   visible: boolean;
@@ -562,17 +567,6 @@ export const AttachmentModal = ({
     }
   }, []);
 
-  const requestMediaPermissions = async () => {
-    const { status } = await MediaLibrary.requestPermissionsAsync(false, ["photo", "video"]);
-    setHasPermission(status === "granted");
-    if (status === "granted") {
-      fetchPhotos(null);
-      MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true })
-        .then(result => setAlbums(result))
-        .catch(console.error);
-    }
-  };
-
   const fetchPhotos = useCallback(async (album: MediaLibrary.Album | null = selectedAlbum) => {
     setIsLoading(true);
     setAssets([]);
@@ -599,6 +593,31 @@ export const AttachmentModal = ({
       setIsLoading(false);
     }
   }, [loadDownloadedMediaAssets, selectedAlbum]);
+
+  const requestMediaPermissions = async () => {
+    setIsLoading(true);
+
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync(false, ["photo", "video"]);
+      const isGranted = status === "granted";
+
+      setHasPermission(isGranted);
+
+      if (isGranted) {
+        fetchPhotos(null);
+        MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true })
+          .then(result => setAlbums(result))
+          .catch(console.error);
+        return;
+      }
+
+      setIsLoading(false);
+    } catch (error) {
+      console.error("Failed to request media permissions", error);
+      setHasPermission(false);
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (hasPermission) {
@@ -1039,7 +1058,27 @@ export const AttachmentModal = ({
   };
 
   // ─── Gallery ──────────────────────────────────────────────────────────────
+  const renderGallerySkeleton = () => (
+    <View style={styles.galleryContainer}>
+      <View style={styles.gallerySkeletonGrid}>
+        {GALLERY_SKELETON_ITEMS.map((item, index) => (
+          <View
+            key={item}
+            style={[
+              styles.gallerySkeletonItem,
+              (index + 1) % COLUMN_COUNT === 0 && styles.gallerySkeletonItemEndOfRow,
+            ]}
+          />
+        ))}
+      </View>
+    </View>
+  );
+
   const renderGallery = () => {
+    if (hasPermission === null || (isLoading && galleryAssets.length === 0)) {
+      return renderGallerySkeleton();
+    }
+
     if (!hasPermission) {
       return (
         <View style={styles.permissionContainer}>
@@ -1049,14 +1088,6 @@ export const AttachmentModal = ({
           <Pressable style={styles.permissionButton} onPress={requestMediaPermissions}>
             <Text style={styles.permissionButtonText}>Allow Access</Text>
           </Pressable>
-        </View>
-      );
-    }
-
-    if (isLoading && galleryAssets.length === 0) {
-      return (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary} />
         </View>
       );
     }
@@ -1573,6 +1604,21 @@ const styles = StyleSheet.create({
   // ─── Gallery ────────────────────────────────────────────────────────────
   galleryContainer: {
     flex: 1,
+  },
+  gallerySkeletonGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignContent: "flex-start",
+  },
+  gallerySkeletonItem: {
+    width: ITEM_SIZE,
+    height: ITEM_SIZE,
+    marginBottom: ITEM_MARGIN,
+    marginRight: ITEM_MARGIN,
+    backgroundColor: "rgba(0,0,0,0.08)",
+  },
+  gallerySkeletonItemEndOfRow: {
+    marginRight: 0,
   },
   galleryContent: {
     paddingBottom: 20,

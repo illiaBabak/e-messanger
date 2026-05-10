@@ -35,9 +35,10 @@ const CONTROLS_AUTO_HIDE_DELAY_MS = 2500;
 const END_DETECTION_THRESHOLD_MS = 300;
 const TRACK_HEIGHT = 36;
 const HANDLE_SIZE = 26;
-const HEADER_RESERVED_HEIGHT = 92;
-const BOTTOM_PANEL_RESERVED_HEIGHT = 176;
-const CHAT_PLAYER_BOTTOM_PADDING = 28;
+const HEADER_RESERVED_HEIGHT = 86;
+const BOTTOM_PANEL_RESERVED_HEIGHT = 136;
+const CHAT_PLAYER_BOTTOM_PADDING = 20;
+const PREPARING_VIDEO_LABEL = "Preparing video...";
 
 export type VideoPreviewModalProps = {
   visible: boolean;
@@ -227,23 +228,23 @@ export const VideoPreviewModal = ({
   const scheduleControlsAutoHide = useCallback(() => {
     clearControlsAutoHideTimeout();
 
-    if (!isPlaying) {
+    if (!isPlaying || isPlayerLoading) {
       return;
     }
 
     controlsAutoHideTimeoutRef.current = setTimeout(() => {
       setAreControlsVisible(false);
     }, CONTROLS_AUTO_HIDE_DELAY_MS);
-  }, [clearControlsAutoHideTimeout, isPlaying]);
+  }, [clearControlsAutoHideTimeout, isPlayerLoading, isPlaying]);
 
   useEffect(() => {
-    if (areControlsVisible && isPlaying) {
+    if (areControlsVisible && isPlaying && !isPlayerLoading) {
       scheduleControlsAutoHide();
       return;
     }
 
     clearControlsAutoHideTimeout();
-  }, [areControlsVisible, clearControlsAutoHideTimeout, isPlaying, scheduleControlsAutoHide]);
+  }, [areControlsVisible, clearControlsAutoHideTimeout, isPlayerLoading, isPlaying, scheduleControlsAutoHide]);
 
   useEffect(() => clearControlsAutoHideTimeout, [clearControlsAutoHideTimeout]);
 
@@ -290,6 +291,10 @@ export const VideoPreviewModal = ({
   );
 
   const handlePlayerTap = useCallback(() => {
+    if (isPlayerLoading) {
+      return;
+    }
+
     if (!areControlsVisible) {
       setAreControlsVisible(true);
       return;
@@ -298,7 +303,7 @@ export const VideoPreviewModal = ({
     if (isPlaying) {
       setAreControlsVisible(false);
     }
-  }, [areControlsVisible, isPlaying]);
+  }, [areControlsVisible, isPlayerLoading, isPlaying]);
 
   const handleProgressTrackLayout = useCallback((event: LayoutChangeEvent) => {
     setProgressTrackWidth(event.nativeEvent.layout.width);
@@ -321,6 +326,7 @@ export const VideoPreviewModal = ({
 
   const handleFirstFrameRender = useCallback(() => {
     setIsPlayerLoading(false);
+    setAreControlsVisible(true);
 
     const nextDurationMs = player.duration > 0 ? Math.round(player.duration * MS_PER_SECOND) : undefined;
 
@@ -420,6 +426,8 @@ export const VideoPreviewModal = ({
   const trimChanged = hasVideoTrimChanged(trimRange, durationMs);
   const canShowSendButton = Boolean((showSendButton ?? Boolean(onSend)) && onSend);
   const canShowActionsMenu = showActionsMenu && hasPreviewActions(actions);
+  const isDownloadInProgress = Boolean(actions?.isDownloadInProgress);
+  const downloadStatusText = actions?.downloadStatusText ?? "Saving video...";
   const hasBottomPanel = showTrimControls || canShowSendButton;
   const canRenderTrimControls = showTrimControls && Boolean(durationMs && durationMs > MIN_TRIM_DURATION_MS);
   const selectedLeft = durationMs && trackWidth > 0 ? (trimRange.startMs / durationMs) * trackWidth : 0;
@@ -436,11 +444,14 @@ export const VideoPreviewModal = ({
     ? BOTTOM_PANEL_RESERVED_HEIGHT + Math.max(insets.bottom, 16)
     : CHAT_PLAYER_BOTTOM_PADDING + Math.max(insets.bottom, 16);
   const actionsMenuTop = Math.max(insets.top, 20) + 44;
+  const canShowPlayerControls = areControlsVisible && !isPlayerLoading;
 
   const handleSend = async () => {
     if (!video || !onSend || isSending) {
       return;
     }
+
+    let didStartSend = false;
 
     try {
       setIsSending(true);
@@ -465,10 +476,13 @@ export const VideoPreviewModal = ({
         };
       }
 
+      didStartSend = true;
       await onSend(videoToSend);
     } catch (error) {
       console.error("Failed to send video", error);
-      Alert.alert("Video Error", "Could not send this video.");
+      if (!didStartSend) {
+        Alert.alert("Video Error", "Could not prepare this video.");
+      }
     } finally {
       setIsSending(false);
     }
@@ -540,7 +554,7 @@ export const VideoPreviewModal = ({
             />
             <Pressable style={StyleSheet.absoluteFill} onPress={handlePlayerTap} />
 
-            {areControlsVisible ? (
+            {canShowPlayerControls ? (
               <View style={styles.controlsOverlay} pointerEvents="box-none">
                 <View style={styles.centerControls} pointerEvents="box-none">
                   <View style={styles.centerControlsRow}>
@@ -597,13 +611,6 @@ export const VideoPreviewModal = ({
           <View style={[styles.bottomControls, { paddingBottom: Math.max(insets.bottom, 16) }]}>
             {showTrimControls ? (
               <View style={styles.trimContainer}>
-                <View style={styles.trimHeader}>
-                  <Ionicons name="cut" size={18} color={Colors.white} />
-                  <Text style={styles.trimRangeText}>
-                    {formatTime(trimRange.startMs)} — {formatTime(trimRange.endMs)}
-                  </Text>
-                </View>
-
                 {canRenderTrimControls ? (
                   <View style={styles.timelineRow}>
                     <Text style={styles.timelineEdgeText}>0:00</Text>
@@ -649,7 +656,10 @@ export const VideoPreviewModal = ({
                 disabled={disableSend}
               >
                 {isSending ? (
-                  <ActivityIndicator size="small" color={Colors.white} />
+                  <>
+                    <ActivityIndicator size="small" color={Colors.white} />
+                    <Text style={styles.sendButtonText}>{PREPARING_VIDEO_LABEL}</Text>
+                  </>
                 ) : (
                   <>
                     <Text style={styles.sendButtonText}>Send</Text>
@@ -658,6 +668,13 @@ export const VideoPreviewModal = ({
                 )}
               </Pressable>
             ) : null}
+          </View>
+        ) : null}
+
+        {isDownloadInProgress ? (
+          <View style={styles.downloadOverlay} pointerEvents="none">
+            <ActivityIndicator size="small" color={Colors.white} />
+            <Text style={styles.downloadOverlayText}>{downloadStatusText}</Text>
           </View>
         ) : null}
       </View>
@@ -811,6 +828,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "rgba(0,0,0,0.2)",
   },
+  downloadOverlay: {
+    position: "absolute",
+    alignSelf: "center",
+    bottom: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: "rgba(0,0,0,0.72)",
+  },
+  downloadOverlayText: {
+    color: Colors.white,
+    fontSize: 14,
+    fontWeight: "600",
+  },
   bottomControls: {
     position: "absolute",
     left: 0,
@@ -822,18 +856,7 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   trimContainer: {
-    gap: 10,
-  },
-  trimHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
     gap: 8,
-  },
-  trimRangeText: {
-    color: Colors.white,
-    fontSize: 14,
-    fontWeight: "700",
   },
   timelineRow: {
     flexDirection: "row",

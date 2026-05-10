@@ -2,12 +2,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import { Image } from "expo-image";
 import React, { useRef } from "react";
-import { ActivityIndicator, Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Animated, Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Colors } from "@/constants/theme";
+import { MediaHighlightFrame } from "./MediaHighlightFrame";
 
 const { width } = Dimensions.get("window");
 const IMAGE_MAX_WIDTH = width * 0.55; // 55% of screen width
+const IMAGE_ASPECT_RATIO = 0.8;
 
 export type ImageMessageProps = {
   url: string;
@@ -15,6 +17,7 @@ export type ImageMessageProps = {
   timeStr: string;
   status?: "sending" | "sent" | "error" | "read";
   isRead?: boolean;
+  highlightOpacity?: Animated.Value;
   onPress: () => void;
   onLongPress: (layout: { x: number; y: number; width: number; height: number }) => void;
 };
@@ -25,6 +28,7 @@ export const ImageMessage = ({
   timeStr,
   status,
   isRead,
+  highlightOpacity,
   onPress,
   onLongPress,
 }: ImageMessageProps) => {
@@ -42,31 +46,38 @@ export const ImageMessage = ({
         onPress={onPress}
         onLongPress={handleLongPress}
         delayLongPress={250}
-        style={[styles.container, isMe ? styles.containerMe : styles.containerFriend]}
+        style={styles.container}
       >
-        <Image source={url} style={styles.image} contentFit="cover" transition={200} />
+        <MediaHighlightFrame
+          isMe={isMe}
+          highlightOpacity={highlightOpacity}
+          style={styles.mediaHighlightOuter}
+          clipStyle={styles.mediaClip}
+        >
+          <Image source={url} style={styles.mediaImage} contentFit="cover" transition={200} />
 
-        {status === "sending" && (
-          <View style={styles.sendingOverlay}>
-            <ActivityIndicator size="small" color={Colors.white} />
-          </View>
-        )}
+          {status === "sending" && (
+            <View style={styles.sendingOverlay}>
+              <ActivityIndicator size="small" color={Colors.white} />
+            </View>
+          )}
 
-        {/* Time overlay with glassmorphism */}
-        <View style={styles.timeOverlayContainer}>
-          <BlurView intensity={30} tint="dark" style={styles.timeBlur} />
-          <View style={styles.timeContent}>
-            <Text style={styles.timeText}>{timeStr}</Text>
-            {isMe && status !== "sending" && (
-              <Ionicons
-                name={isRead ? "checkmark-done" : "checkmark"}
-                size={14}
-                color={isRead ? "#4CAF50" : Colors.white}
-                style={styles.checkmark}
-              />
-            )}
+          {/* Time overlay with glassmorphism */}
+          <View style={styles.timeOverlayContainer}>
+            <BlurView intensity={30} tint="dark" style={styles.timeBlur} />
+            <View style={styles.timeContent}>
+              <Text style={styles.timeText}>{timeStr}</Text>
+              {isMe && status !== "sending" && (
+                <Ionicons
+                  name={isRead ? "checkmark-done" : "checkmark"}
+                  size={14}
+                  color={isRead ? "#4CAF50" : Colors.white}
+                  style={styles.checkmark}
+                />
+              )}
+            </View>
           </View>
-        </View>
+        </MediaHighlightFrame>
       </Pressable>
     </View>
   );
@@ -75,21 +86,16 @@ export const ImageMessage = ({
 const styles = StyleSheet.create({
   container: {
     maxWidth: IMAGE_MAX_WIDTH,
-    borderRadius: 16,
-    overflow: "hidden", // Ensures image fits the border radius
-    borderWidth: 1, // minimal frame
-    borderColor: "rgba(255,255,255,0.1)",
   },
-  containerMe: {
-    borderBottomRightRadius: 4,
-  },
-  containerFriend: {
-    borderBottomLeftRadius: 4,
-  },
-  image: {
+  mediaHighlightOuter: {
     width: IMAGE_MAX_WIDTH,
-    aspectRatio: 0.8, // Slightly taller than square for modern look
+    aspectRatio: IMAGE_ASPECT_RATIO,
+  },
+  mediaClip: {
     backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  mediaImage: {
+    ...StyleSheet.absoluteFillObject,
   },
   sendingOverlay: {
     ...StyleSheet.absoluteFillObject,

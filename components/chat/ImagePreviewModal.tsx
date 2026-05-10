@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import React, { useState } from "react";
-import { Dimensions, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Dimensions, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Colors } from "@/constants/theme";
@@ -17,6 +17,8 @@ export type ImagePreviewModalProps = {
   onClose: () => void;
   onReply: () => void;
   onDownload: () => void;
+  isDownloadInProgress?: boolean;
+  downloadStatusText?: string;
   onDelete: () => void;
   onForward: () => void;
 };
@@ -29,6 +31,8 @@ export const ImagePreviewModal = ({
   onClose,
   onReply,
   onDownload,
+  isDownloadInProgress = false,
+  downloadStatusText = "Saving image...",
   onDelete,
   onForward,
 }: ImagePreviewModalProps) => {
@@ -75,12 +79,21 @@ export const ImagePreviewModal = ({
             onClose={() => setMenuVisible(false)}
             actions={{
               onDownload,
+              isDownloadInProgress,
+              downloadStatusText,
               onReply,
               onForward,
               onDelete,
             }}
           />
         )}
+
+        {isDownloadInProgress ? (
+          <View style={styles.downloadOverlay} pointerEvents="none">
+            <ActivityIndicator size="small" color={Colors.white} />
+            <Text style={styles.downloadOverlayText}>{downloadStatusText}</Text>
+          </View>
+        ) : null}
       </View>
     </Modal>
   );
@@ -124,5 +137,22 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.7)",
     fontSize: 12,
     marginTop: 2,
+  },
+  downloadOverlay: {
+    position: "absolute",
+    alignSelf: "center",
+    bottom: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: "rgba(0,0,0,0.72)",
+  },
+  downloadOverlayText: {
+    color: Colors.white,
+    fontSize: 14,
+    fontWeight: "600",
   },
 });

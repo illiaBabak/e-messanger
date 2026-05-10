@@ -85,7 +85,8 @@ export default {
           "cameraPermission": "Allow e-messanger to access your camera."
         }
       ],
-      "expo-video"
+      "expo-video",
+      "react-native-compressor"
     ],
     experiments: {
       typedRoutes: true,

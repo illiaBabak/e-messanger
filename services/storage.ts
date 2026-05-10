@@ -1,5 +1,6 @@
 import { getDownloadURL, putFile, ref } from "@react-native-firebase/storage";
 import { ensureUploadableLocalFileAsync } from "@/utils/ensureUploadableLocalFile";
+import { assertVideoUploadSize } from "@/utils/videoCompression";
 import { storage } from "./firebase";
 
 const FILE_URI_PREFIX = "file://";
@@ -99,6 +100,10 @@ export async function uploadVideoMessage(
       fileName: originalName ?? `${messageId}.${DEFAULT_VIDEO_EXTENSION}`,
       mimeType,
     });
+    if (uploadableFile.size !== undefined) {
+      assertVideoUploadSize(uploadableFile.size);
+    }
+
     const cleanUri = uploadableFile.uri.replace(FILE_URI_PREFIX, "");
     const extension =
       uploadableFile.fileName.split(".").pop() ||

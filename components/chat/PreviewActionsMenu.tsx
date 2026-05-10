@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Colors } from "@/constants/theme";
 
@@ -8,6 +8,8 @@ type PreviewActionHandler = () => Promise<void> | void;
 
 export type PreviewActions = {
   onDownload?: PreviewActionHandler;
+  isDownloadInProgress?: boolean;
+  downloadStatusText?: string;
   onReply?: PreviewActionHandler;
   onForward?: PreviewActionHandler;
   onDelete?: PreviewActionHandler;
@@ -43,9 +45,19 @@ export const PreviewActionsMenu = ({
     <Pressable style={styles.overlay} onPress={onClose}>
       <View style={[styles.popoverMenu, { top }]}>
         {actions.onDownload ? (
-          <Pressable style={styles.menuItem} onPress={() => handleAction(actions.onDownload)}>
-            <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
-            <Text style={styles.menuItemText}>Download</Text>
+          <Pressable
+            style={[styles.menuItem, actions.isDownloadInProgress && styles.menuItemDisabled]}
+            onPress={() => handleAction(actions.onDownload)}
+            disabled={actions.isDownloadInProgress}
+          >
+            {actions.isDownloadInProgress ? (
+              <ActivityIndicator size="small" color={Colors.textSecondary} />
+            ) : (
+              <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
+            )}
+            <Text style={styles.menuItemText}>
+              {actions.isDownloadInProgress ? actions.downloadStatusText ?? "Saving..." : "Download"}
+            </Text>
           </Pressable>
         ) : null}
 
@@ -105,6 +117,9 @@ const styles = StyleSheet.create({
   menuItemText: {
     color: Colors.textPrimary,
     fontSize: 16,
+  },
+  menuItemDisabled: {
+    opacity: 0.55,
   },
   destructiveText: {
     color: "#FF3B30",
