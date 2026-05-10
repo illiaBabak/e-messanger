@@ -6,19 +6,20 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
-  GestureResponderEvent,
   LayoutChangeEvent,
   Modal,
   PanResponder,
   Pressable,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Colors } from "@/constants/theme";
 import type { SelectedChatMedia, VideoTrimRange } from "@/types/chatMedia";
+import { getCachedMediaUriAsync } from "@/utils/mediaCache";
 import { hasVideoTrimChanged, trimVideoAsync } from "@/utils/videoTrim";
 import {
   hasPreviewActions,
@@ -30,14 +31,21 @@ const { width } = Dimensions.get("window");
 const MIN_TRIM_DURATION_MS = 1000;
 const MS_PER_SECOND = 1000;
 const SEEK_STEP_SECONDS = 15;
-const PLAYER_PROGRESS_INTERVAL_MS = 250;
+const PLAYER_PROGRESS_INTERVAL_MS = 500;
 const CONTROLS_AUTO_HIDE_DELAY_MS = 2500;
 const END_DETECTION_THRESHOLD_MS = 300;
+const SEEK_LOCK_RELEASE_DELAY_MS = 120;
 const TRACK_HEIGHT = 36;
 const HANDLE_SIZE = 26;
+const PROGRESS_THUMB_SIZE = 10;
 const HEADER_RESERVED_HEIGHT = 86;
+const GALLERY_HEADER_RESERVED_HEIGHT = 70;
 const BOTTOM_PANEL_RESERVED_HEIGHT = 136;
+const GALLERY_BOTTOM_PANEL_RESERVED_HEIGHT = 118;
 const CHAT_PLAYER_BOTTOM_PADDING = 20;
+const CHAT_PLAYER_HORIZONTAL_PADDING = 8;
+const GALLERY_PLAYER_HORIZONTAL_PADDING = 0;
+const GALLERY_PLAYER_SURFACE_WIDTH_RATIO = 0.99;
 const PREPARING_VIDEO_LABEL = "Preparing video...";
 
 export type VideoPreviewModalProps = {
@@ -56,6 +64,11 @@ export type VideoPreviewModalProps = {
 
 export type VideoPreviewActions = PreviewActions;
 
+type PlaybackRange = {
+  startMs: number;
+  endMs: number;
+};
+
 const clamp = (value: number, min: number, max: number): number => {
   if (max < min) {
     return min;
@@ -70,7 +83,7 @@ const formatTime = (milliseconds: number): string => {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
 
-  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 };
 
 const getInitialRange = (durationMs: number | undefined): VideoTrimRange => ({
@@ -89,8 +102,21 @@ const getDurationMs = (
   return playerDurationMs && playerDurationMs > 0 ? playerDurationMs : undefined;
 };
 
-const isPlaybackAtEnd = (currentTimeMs: number, durationMs: number): boolean =>
-  durationMs > 0 && currentTimeMs >= durationMs - END_DETECTION_THRESHOLD_MS;
+const isPlaybackAtRangeEnd = (currentTimeMs: number, range: PlaybackRange): boolean =>
+  range.endMs > range.startMs && currentTimeMs >= range.endMs - END_DETECTION_THRESHOLD_MS;
+
+const getVideoPreparationErrorMessage = (error: unknown): string => {
+  if (!(error instanceof Error) || error.message.trim().length === 0) {
+    return "Could not prepare this video.";
+  }
+
+  const trimPrefix = "Failed to trim video:";
+  const message = error.message.startsWith(trimPrefix)
+    ? error.message.slice(trimPrefix.length).trim()
+    : error.message;
+
+  return `Could not trim this video. ${message}`;
+};
 
 export const VideoPreviewModal = ({
   visible,
@@ -106,18 +132,22 @@ export const VideoPreviewModal = ({
   onSend,
 }: VideoPreviewModalProps) => {
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
   const [trimRange, setTrimRange] = useState<VideoTrimRange>(() => getInitialRange(video?.duration));
   const [trackWidth, setTrackWidth] = useState(0);
   const [progressTrackWidth, setProgressTrackWidth] = useState(0);
   const [isSending, setIsSending] = useState(false);
   const [isPlayerLoading, setIsPlayerLoading] = useState(false);
+  const [isMediaResolving, setIsMediaResolving] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [dragCurrentTimeMs, setDragCurrentTimeMs] = useState<number | null>(null);
   const [playerDurationMs, setPlayerDurationMs] = useState<number | undefined>(undefined);
   const [areControlsVisible, setAreControlsVisible] = useState(true);
   const [actionsMenuVisible, setActionsMenuVisible] = useState(false);
+  const [playbackUri, setPlaybackUri] = useState<string | null>(null);
 
-  const videoSource = useMemo(() => (video?.uri ? { uri: video.uri } : null), [video?.uri]);
+  const videoSource = useMemo(() => (playbackUri ? { uri: playbackUri } : null), [playbackUri]);
   const player = useVideoPlayer(videoSource, (videoPlayer) => {
     videoPlayer.loop = false;
     videoPlayer.keepScreenOnWhilePlaying = true;
@@ -135,7 +165,12 @@ export const VideoPreviewModal = ({
   const trackWidthRef = useRef(trackWidth);
   const progressTrackWidthRef = useRef(progressTrackWidth);
   const currentTimeRef = useRef(currentTimeMs);
+  const dragCurrentTimeRef = useRef<number | null>(dragCurrentTimeMs);
+  const progressDragStartTimeRef = useRef(0);
+  const isProgressDraggingRef = useRef(false);
+  const isSeekPendingRef = useRef(false);
   const controlsAutoHideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seekUnlockTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     trimRangeRef.current = trimRange;
@@ -158,38 +193,138 @@ export const VideoPreviewModal = ({
   }, [currentTimeMs]);
 
   useEffect(() => {
+    dragCurrentTimeRef.current = dragCurrentTimeMs;
+  }, [dragCurrentTimeMs]);
+
+  const getPlaybackRange = useCallback((): PlaybackRange => {
+    const currentDurationMs = durationRef.current ?? 0;
+
+    if (showTrimControls) {
+      const currentTrimRange = trimRangeRef.current;
+
+      if (currentTrimRange.endMs > currentTrimRange.startMs) {
+        return {
+          startMs: currentTrimRange.startMs,
+          endMs: currentTrimRange.endMs,
+        };
+      }
+    }
+
+    return {
+      startMs: 0,
+      endMs: currentDurationMs,
+    };
+  }, [showTrimControls]);
+
+  const setCurrentPlaybackTime = useCallback((nextTimeMs: number) => {
+    currentTimeRef.current = nextTimeMs;
+    setCurrentTimeMs(nextTimeMs);
+    setDragCurrentTimeMs(null);
+  }, []);
+
+  useEffect(() => {
     setTrimRange(getInitialRange(durationMs));
   }, [durationMs, video?.uri]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!visible || !video?.uri) {
+      setPlaybackUri(null);
+      setIsMediaResolving(false);
+      return;
+    }
+
+    setPlaybackUri(null);
+    setIsMediaResolving(true);
+    setIsPlayerLoading(true);
+
+    const resolvePlaybackUri = async () => {
+      const cachedUri = await getCachedMediaUriAsync({
+        uri: video.uri,
+        mediaType: "video",
+        mimeType: video.mimeType,
+        fileName: video.fileName,
+      });
+
+      if (isMounted) {
+        setPlaybackUri(cachedUri);
+        setIsMediaResolving(false);
+      }
+    };
+
+    resolvePlaybackUri().catch((error: unknown) => {
+      if (__DEV__) {
+        console.warn("Failed to resolve video preview cache", error);
+      }
+
+      if (isMounted) {
+        setPlaybackUri(video.uri);
+        setIsMediaResolving(false);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [video?.fileName, video?.mimeType, video?.uri, visible]);
 
   useEventListener(player, "playingChange", ({ isPlaying: nextIsPlaying }) => {
     setIsPlaying(nextIsPlaying);
   });
 
+  useEventListener(player, "statusChange", ({ status }) => {
+    if (status === "loading") {
+      setIsPlayerLoading(true);
+      return;
+    }
+
+    if (status === "readyToPlay" || status === "error") {
+      setIsPlayerLoading(false);
+    }
+  });
+
   useEventListener(player, "timeUpdate", ({ currentTime }) => {
+    if (isProgressDraggingRef.current) {
+      return;
+    }
+
     const nextTimeMs = Math.round(currentTime * MS_PER_SECOND);
-    const currentDurationMs = durationRef.current;
-    setCurrentTimeMs(clamp(nextTimeMs, 0, currentDurationMs ?? nextTimeMs));
+    const playbackRange = getPlaybackRange();
+
+    if (showTrimControls && isPlaybackAtRangeEnd(nextTimeMs, playbackRange)) {
+      player.pause();
+      player.currentTime = playbackRange.startMs / MS_PER_SECOND;
+      setIsPlaying(false);
+      setAreControlsVisible(true);
+      setCurrentPlaybackTime(playbackRange.startMs);
+      return;
+    }
+
+    setCurrentPlaybackTime(clamp(nextTimeMs, playbackRange.startMs, playbackRange.endMs || nextTimeMs));
   });
 
   useEventListener(player, "sourceLoad", ({ duration }) => {
     const nextDurationMs = duration > 0 ? Math.round(duration * MS_PER_SECOND) : undefined;
     setPlayerDurationMs(nextDurationMs);
-    setCurrentTimeMs(0);
+    const initialTimeMs = showTrimControls ? trimRangeRef.current.startMs : 0;
+    setCurrentPlaybackTime(initialTimeMs);
     setIsPlayerLoading(false);
 
     if (visible && autoPlay) {
+      player.currentTime = initialTimeMs / MS_PER_SECOND;
       player.play();
       setIsPlaying(true);
     }
   });
 
   useEventListener(player, "playToEnd", () => {
-    const currentDurationMs = durationRef.current;
+    const playbackRange = getPlaybackRange();
     setIsPlaying(false);
     setAreControlsVisible(true);
 
-    if (currentDurationMs) {
-      setCurrentTimeMs(currentDurationMs);
+    if (playbackRange.endMs > playbackRange.startMs) {
+      setCurrentPlaybackTime(showTrimControls ? playbackRange.startMs : playbackRange.endMs);
     }
   });
 
@@ -198,17 +333,19 @@ export const VideoPreviewModal = ({
       player.pause();
       setIsSending(false);
       setIsPlaying(false);
+      setDragCurrentTimeMs(null);
       setActionsMenuVisible(false);
       return;
     }
 
-    if (video?.uri) {
+    if (playbackUri) {
       setIsPlayerLoading(true);
       setPlayerDurationMs(undefined);
-      setCurrentTimeMs(0);
+      setCurrentPlaybackTime(showTrimControls ? trimRangeRef.current.startMs : 0);
       setAreControlsVisible(true);
 
       if (autoPlay) {
+        player.currentTime = (showTrimControls ? trimRangeRef.current.startMs : 0) / MS_PER_SECOND;
         player.play();
         setIsPlaying(true);
       } else {
@@ -216,7 +353,7 @@ export const VideoPreviewModal = ({
         setIsPlaying(false);
       }
     }
-  }, [autoPlay, player, video?.uri, visible]);
+  }, [autoPlay, playbackUri, player, setCurrentPlaybackTime, showTrimControls, visible]);
 
   const clearControlsAutoHideTimeout = useCallback(() => {
     if (controlsAutoHideTimeoutRef.current) {
@@ -228,42 +365,65 @@ export const VideoPreviewModal = ({
   const scheduleControlsAutoHide = useCallback(() => {
     clearControlsAutoHideTimeout();
 
-    if (!isPlaying || isPlayerLoading) {
+    if (!isPlaying || isPlayerLoading || isMediaResolving) {
       return;
     }
 
     controlsAutoHideTimeoutRef.current = setTimeout(() => {
       setAreControlsVisible(false);
     }, CONTROLS_AUTO_HIDE_DELAY_MS);
-  }, [clearControlsAutoHideTimeout, isPlayerLoading, isPlaying]);
+  }, [clearControlsAutoHideTimeout, isMediaResolving, isPlayerLoading, isPlaying]);
 
   useEffect(() => {
-    if (areControlsVisible && isPlaying && !isPlayerLoading) {
+    if (areControlsVisible && isPlaying && !isPlayerLoading && !isMediaResolving) {
       scheduleControlsAutoHide();
       return;
     }
 
     clearControlsAutoHideTimeout();
-  }, [areControlsVisible, clearControlsAutoHideTimeout, isPlayerLoading, isPlaying, scheduleControlsAutoHide]);
+  }, [areControlsVisible, clearControlsAutoHideTimeout, isMediaResolving, isPlayerLoading, isPlaying, scheduleControlsAutoHide]);
 
   useEffect(() => clearControlsAutoHideTimeout, [clearControlsAutoHideTimeout]);
 
+  useEffect(() => {
+    return () => {
+      if (seekUnlockTimeoutRef.current) {
+        clearTimeout(seekUnlockTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const seekToMs = useCallback(
-    (milliseconds: number) => {
-      const currentDurationMs = durationRef.current;
-      const nextTimeMs = clamp(milliseconds, 0, currentDurationMs ?? Math.max(0, milliseconds));
+    (milliseconds: number, force: boolean = false) => {
+      if (isSeekPendingRef.current && !force) {
+        return;
+      }
+
+      const playbackRange = getPlaybackRange();
+      const fallbackEndMs = playbackRange.endMs > playbackRange.startMs
+        ? playbackRange.endMs
+        : Math.max(playbackRange.startMs, milliseconds);
+      const nextTimeMs = clamp(milliseconds, playbackRange.startMs, fallbackEndMs);
+      isSeekPendingRef.current = true;
       player.currentTime = nextTimeMs / MS_PER_SECOND;
-      setCurrentTimeMs(nextTimeMs);
+      setCurrentPlaybackTime(nextTimeMs);
       setAreControlsVisible(true);
+
+      if (seekUnlockTimeoutRef.current) {
+        clearTimeout(seekUnlockTimeoutRef.current);
+      }
+
+      seekUnlockTimeoutRef.current = setTimeout(() => {
+        isSeekPendingRef.current = false;
+        seekUnlockTimeoutRef.current = null;
+      }, SEEK_LOCK_RELEASE_DELAY_MS);
     },
-    [player],
+    [getPlaybackRange, player, setCurrentPlaybackTime],
   );
 
   const togglePlayback = useCallback(() => {
-    const currentDurationMs = durationRef.current;
-    const videoEnded = Boolean(
-      currentDurationMs && isPlaybackAtEnd(currentTimeRef.current, currentDurationMs),
-    );
+    const playbackRange = getPlaybackRange();
+    const videoEnded = isPlaybackAtRangeEnd(currentTimeRef.current, playbackRange);
     const shouldPause = !videoEnded && (isPlaying || player.playing);
 
     if (shouldPause) {
@@ -273,15 +433,18 @@ export const VideoPreviewModal = ({
       return;
     }
 
-    if (videoEnded) {
-      player.currentTime = 0;
-      setCurrentTimeMs(0);
+    const isCurrentTimeOutsideRange =
+      currentTimeRef.current < playbackRange.startMs || currentTimeRef.current >= playbackRange.endMs;
+
+    if (videoEnded || isCurrentTimeOutsideRange) {
+      player.currentTime = playbackRange.startMs / MS_PER_SECOND;
+      setCurrentPlaybackTime(playbackRange.startMs);
     }
 
     player.play();
     setIsPlaying(true);
     setAreControlsVisible(true);
-  }, [isPlaying, player]);
+  }, [getPlaybackRange, isPlaying, player, setCurrentPlaybackTime]);
 
   const seekBySeconds = useCallback(
     (seconds: number) => {
@@ -291,7 +454,7 @@ export const VideoPreviewModal = ({
   );
 
   const handlePlayerTap = useCallback(() => {
-    if (isPlayerLoading) {
+    if (isPlayerLoading || isMediaResolving || !playbackUri) {
       return;
     }
 
@@ -303,25 +466,87 @@ export const VideoPreviewModal = ({
     if (isPlaying) {
       setAreControlsVisible(false);
     }
-  }, [areControlsVisible, isPlayerLoading, isPlaying]);
+  }, [areControlsVisible, isMediaResolving, isPlayerLoading, isPlaying, playbackUri]);
 
   const handleProgressTrackLayout = useCallback((event: LayoutChangeEvent) => {
     setProgressTrackWidth(event.nativeEvent.layout.width);
   }, []);
 
-  const handleProgressPress = useCallback(
-    (event: GestureResponderEvent) => {
-      const currentDurationMs = durationRef.current;
-      const currentProgressTrackWidth = progressTrackWidthRef.current;
+  const getProgressTimeFromLocation = useCallback((locationX: number): number | null => {
+    const playbackRange = getPlaybackRange();
+    const rangeDurationMs = playbackRange.endMs - playbackRange.startMs;
+    const currentProgressTrackWidth = progressTrackWidthRef.current;
 
-      if (!currentDurationMs || currentProgressTrackWidth <= 0) {
-        return;
-      }
+    if (rangeDurationMs <= 0 || currentProgressTrackWidth <= 0) {
+      return null;
+    }
 
-      const nextProgress = clamp(event.nativeEvent.locationX / currentProgressTrackWidth, 0, 1);
-      seekToMs(nextProgress * currentDurationMs);
-    },
-    [seekToMs],
+    const nextProgress = clamp(locationX / currentProgressTrackWidth, 0, 1);
+
+    return playbackRange.startMs + nextProgress * rangeDurationMs;
+  }, [getPlaybackRange]);
+
+  const updateProgressDrag = useCallback((nextTimeMs: number) => {
+    dragCurrentTimeRef.current = nextTimeMs;
+    setDragCurrentTimeMs(nextTimeMs);
+    setAreControlsVisible(true);
+  }, []);
+
+  const commitProgressDrag = useCallback(() => {
+    const nextTimeMs = dragCurrentTimeRef.current;
+    isProgressDraggingRef.current = false;
+    dragCurrentTimeRef.current = null;
+    setDragCurrentTimeMs(null);
+
+    if (nextTimeMs !== null) {
+      seekToMs(nextTimeMs);
+    }
+  }, [seekToMs]);
+
+  const progressPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (event) => {
+          const nextTimeMs = getProgressTimeFromLocation(event.nativeEvent.locationX);
+
+          if (nextTimeMs === null) {
+            return;
+          }
+
+          clearControlsAutoHideTimeout();
+          isProgressDraggingRef.current = true;
+          progressDragStartTimeRef.current = nextTimeMs;
+          updateProgressDrag(nextTimeMs);
+        },
+        onPanResponderMove: (_event, gestureState) => {
+          const playbackRange = getPlaybackRange();
+          const rangeDurationMs = playbackRange.endMs - playbackRange.startMs;
+          const currentProgressTrackWidth = progressTrackWidthRef.current;
+
+          if (rangeDurationMs <= 0 || currentProgressTrackWidth <= 0) {
+            return;
+          }
+
+          const deltaMs = (gestureState.dx / currentProgressTrackWidth) * rangeDurationMs;
+          const nextTimeMs = clamp(
+            progressDragStartTimeRef.current + deltaMs,
+            playbackRange.startMs,
+            playbackRange.endMs,
+          );
+          updateProgressDrag(nextTimeMs);
+        },
+        onPanResponderRelease: commitProgressDrag,
+        onPanResponderTerminate: commitProgressDrag,
+      }),
+    [
+      clearControlsAutoHideTimeout,
+      commitProgressDrag,
+      getPlaybackRange,
+      getProgressTimeFromLocation,
+      updateProgressDrag,
+    ],
   );
 
   const handleFirstFrameRender = useCallback(() => {
@@ -334,15 +559,22 @@ export const VideoPreviewModal = ({
       setPlayerDurationMs(nextDurationMs);
     }
 
-    setCurrentTimeMs(
-      clamp(Math.round(player.currentTime * MS_PER_SECOND), 0, durationRef.current ?? nextDurationMs ?? 0),
+    const playbackRange = getPlaybackRange();
+    const fallbackEndMs = playbackRange.endMs > playbackRange.startMs
+      ? playbackRange.endMs
+      : durationRef.current ?? nextDurationMs ?? 0;
+    const nextCurrentTimeMs = clamp(
+      Math.round(player.currentTime * MS_PER_SECOND),
+      playbackRange.startMs,
+      fallbackEndMs,
     );
+    setCurrentPlaybackTime(nextCurrentTimeMs);
 
     if (autoPlay && visible && !player.playing) {
       player.play();
       setIsPlaying(true);
     }
-  }, [autoPlay, player, visible]);
+  }, [autoPlay, getPlaybackRange, player, setCurrentPlaybackTime, visible]);
 
   const updateStartHandle = useCallback(
     (dx: number) => {
@@ -359,10 +591,10 @@ export const VideoPreviewModal = ({
       const nextStartMs = Math.min(Math.max(0, Math.round(baseRange.startMs + deltaMs)), maxStartMs);
       const nextRange = { ...trimRangeRef.current, startMs: nextStartMs };
 
+      trimRangeRef.current = nextRange;
       setTrimRange(nextRange);
-      seekToMs(nextRange.startMs);
     },
-    [seekToMs],
+    [],
   );
 
   const updateEndHandle = useCallback(
@@ -383,25 +615,54 @@ export const VideoPreviewModal = ({
       );
       const nextRange = { ...trimRangeRef.current, endMs: nextEndMs };
 
+      trimRangeRef.current = nextRange;
       setTrimRange(nextRange);
-      seekToMs(nextRange.endMs);
     },
-    [seekToMs],
+    [],
   );
+
+  const beginTrimDrag = useCallback(() => {
+    clearControlsAutoHideTimeout();
+    dragStartRangeRef.current = trimRangeRef.current;
+
+    if (player.playing) {
+      player.pause();
+      setIsPlaying(false);
+    }
+
+    setAreControlsVisible(true);
+  }, [clearControlsAutoHideTimeout, player]);
+
+  const clampPreviewToTrimRange = useCallback(() => {
+    const playbackRange = getPlaybackRange();
+    const currentTime = currentTimeRef.current;
+
+    if (currentTime < playbackRange.startMs || isPlaybackAtRangeEnd(currentTime, playbackRange)) {
+      seekToMs(playbackRange.startMs, true);
+    }
+  }, [getPlaybackRange, seekToMs]);
+
+  const commitStartTrimDrag = useCallback(() => {
+    clampPreviewToTrimRange();
+  }, [clampPreviewToTrimRange]);
+
+  const commitEndTrimDrag = useCallback(() => {
+    clampPreviewToTrimRange();
+  }, [clampPreviewToTrimRange]);
 
   const leftHandlePanResponder = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: () => {
-          dragStartRangeRef.current = trimRangeRef.current;
-        },
+        onPanResponderGrant: beginTrimDrag,
         onPanResponderMove: (_event, gestureState) => {
           updateStartHandle(gestureState.dx);
         },
+        onPanResponderRelease: commitStartTrimDrag,
+        onPanResponderTerminate: commitStartTrimDrag,
       }),
-    [updateStartHandle],
+    [beginTrimDrag, commitStartTrimDrag, updateStartHandle],
   );
 
   const rightHandlePanResponder = useMemo(
@@ -409,14 +670,14 @@ export const VideoPreviewModal = ({
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: () => {
-          dragStartRangeRef.current = trimRangeRef.current;
-        },
+        onPanResponderGrant: beginTrimDrag,
         onPanResponderMove: (_event, gestureState) => {
           updateEndHandle(gestureState.dx);
         },
+        onPanResponderRelease: commitEndTrimDrag,
+        onPanResponderTerminate: commitEndTrimDrag,
       }),
-    [updateEndHandle],
+    [beginTrimDrag, commitEndTrimDrag, updateEndHandle],
   );
 
   const handleTrackLayout = (event: LayoutChangeEvent) => {
@@ -429,6 +690,8 @@ export const VideoPreviewModal = ({
   const isDownloadInProgress = Boolean(actions?.isDownloadInProgress);
   const downloadStatusText = actions?.downloadStatusText ?? "Saving video...";
   const hasBottomPanel = showTrimControls || canShowSendButton;
+  const isGalleryPreviewMode = showTrimControls;
+  const isVideoLoading = isPlayerLoading || isMediaResolving || !playbackUri;
   const canRenderTrimControls = showTrimControls && Boolean(durationMs && durationMs > MIN_TRIM_DURATION_MS);
   const selectedLeft = durationMs && trackWidth > 0 ? (trimRange.startMs / durationMs) * trackWidth : 0;
   const selectedWidth =
@@ -436,15 +699,43 @@ export const VideoPreviewModal = ({
       ? ((trimRange.endMs - trimRange.startMs) / durationMs) * trackWidth
       : 0;
   const currentDurationMs = durationMs ?? 0;
-  const clampedCurrentTimeMs = clamp(currentTimeMs, 0, currentDurationMs);
-  const progress = currentDurationMs > 0 ? clampedCurrentTimeMs / currentDurationMs : 0;
+  const displayPlaybackRange: PlaybackRange = showTrimControls
+    ? trimRange
+    : { startMs: 0, endMs: currentDurationMs };
+  const displayPlaybackDurationMs = Math.max(
+    0,
+    displayPlaybackRange.endMs - displayPlaybackRange.startMs,
+  );
+  const displayCurrentTimeMs = dragCurrentTimeMs ?? currentTimeMs;
+  const clampedCurrentTimeMs = clamp(
+    displayCurrentTimeMs,
+    displayPlaybackRange.startMs,
+    displayPlaybackRange.endMs || currentDurationMs,
+  );
+  const progress =
+    displayPlaybackDurationMs > 0
+      ? (clampedCurrentTimeMs - displayPlaybackRange.startMs) / displayPlaybackDurationMs
+      : 0;
   const progressFillWidth = progressTrackWidth * progress;
-  const progressThumbLeft = clamp(progressFillWidth - 5, 0, Math.max(0, progressTrackWidth - 10));
+  const progressThumbLeft = clamp(
+    progressFillWidth - PROGRESS_THUMB_SIZE / 2,
+    0,
+    Math.max(0, progressTrackWidth - PROGRESS_THUMB_SIZE),
+  );
+  const selectedDurationMs = Math.max(0, trimRange.endMs - trimRange.startMs);
+  const headerReservedHeight = isGalleryPreviewMode ? GALLERY_HEADER_RESERVED_HEIGHT : HEADER_RESERVED_HEIGHT;
+  const bottomPanelReservedHeight = isGalleryPreviewMode
+    ? GALLERY_BOTTOM_PANEL_RESERVED_HEIGHT
+    : BOTTOM_PANEL_RESERVED_HEIGHT;
   const playerPaddingBottom = hasBottomPanel
-    ? BOTTOM_PANEL_RESERVED_HEIGHT + Math.max(insets.bottom, 16)
+    ? bottomPanelReservedHeight + Math.max(insets.bottom, 16)
     : CHAT_PLAYER_BOTTOM_PADDING + Math.max(insets.bottom, 16);
+  const playerHorizontalPadding = isGalleryPreviewMode
+    ? GALLERY_PLAYER_HORIZONTAL_PADDING
+    : CHAT_PLAYER_HORIZONTAL_PADDING;
+  const galleryPlayerSurfaceWidth = windowWidth * GALLERY_PLAYER_SURFACE_WIDTH_RATIO;
   const actionsMenuTop = Math.max(insets.top, 20) + 44;
-  const canShowPlayerControls = areControlsVisible && !isPlayerLoading;
+  const canShowPlayerControls = areControlsVisible && !isVideoLoading;
 
   const handleSend = async () => {
     if (!video || !onSend || isSending) {
@@ -460,11 +751,12 @@ export const VideoPreviewModal = ({
 
       if (trimChanged) {
         const trimmedVideo = await trimVideoAsync({
-          uri: video.uri,
+          uri: playbackUri ?? video.uri,
           fileName: video.fileName ?? "video.mp4",
           mimeType: video.mimeType ?? "video/mp4",
           startMs: trimRange.startMs,
           endMs: trimRange.endMs,
+          durationMs,
         });
 
         videoToSend = {
@@ -481,7 +773,7 @@ export const VideoPreviewModal = ({
     } catch (error) {
       console.error("Failed to send video", error);
       if (!didStartSend) {
-        Alert.alert("Video Error", "Could not prepare this video.");
+        Alert.alert("Video Error", getVideoPreparationErrorMessage(error));
       }
     } finally {
       setIsSending(false);
@@ -489,7 +781,7 @@ export const VideoPreviewModal = ({
   };
 
   const titleText = video?.fileName || title;
-  const disableSend = isSending || !video?.uri;
+  const disableSend = isSending || !video?.uri || (trimChanged && !playbackUri);
 
   if (!video) {
     return null;
@@ -535,13 +827,22 @@ export const VideoPreviewModal = ({
         <View
           style={[
             styles.playerContainer,
+            isGalleryPreviewMode ? styles.galleryPlayerContainer : styles.chatPlayerContainer,
             {
-              paddingTop: HEADER_RESERVED_HEIGHT + Math.max(insets.top, 0),
+              paddingTop: headerReservedHeight + Math.max(insets.top, 0),
               paddingBottom: playerPaddingBottom,
+              paddingHorizontal: playerHorizontalPadding,
             },
           ]}
         >
-          <View style={styles.playerSurface}>
+          <View
+            style={[
+              styles.playerSurface,
+              isGalleryPreviewMode
+                ? [styles.galleryPlayerSurface, { width: galleryPlayerSurfaceWidth }]
+                : styles.chatPlayerSurface,
+            ]}
+          >
             <VideoView
               player={player}
               nativeControls={false}
@@ -584,23 +885,23 @@ export const VideoPreviewModal = ({
 
                 <View style={styles.progressControls}>
                   <Text style={styles.progressTimeText}>
-                    {formatTime(clampedCurrentTimeMs)} / {formatTime(currentDurationMs)}
+                    {formatTime(clampedCurrentTimeMs)} / {formatTime(displayPlaybackRange.endMs || currentDurationMs)}
                   </Text>
-                  <Pressable
+                  <View
                     style={styles.progressTrackPressable}
                     onLayout={handleProgressTrackLayout}
-                    onPress={handleProgressPress}
+                    {...progressPanResponder.panHandlers}
                   >
                     <View style={styles.progressTrackBase} />
                     <View style={[styles.progressTrackFill, { width: progressFillWidth }]} />
                     <View style={[styles.progressThumb, { left: progressThumbLeft }]} />
-                  </Pressable>
+                  </View>
                 </View>
               </View>
             ) : null}
           </View>
 
-          {isPlayerLoading && (
+          {isVideoLoading && (
             <View style={styles.playerLoadingOverlay} pointerEvents="none">
               <ActivityIndicator size="large" color={Colors.white} />
             </View>
@@ -612,34 +913,39 @@ export const VideoPreviewModal = ({
             {showTrimControls ? (
               <View style={styles.trimContainer}>
                 {canRenderTrimControls ? (
-                  <View style={styles.timelineRow}>
-                    <Text style={styles.timelineEdgeText}>0:00</Text>
-                    <View style={styles.track} onLayout={handleTrackLayout}>
-                      <View style={styles.trackBase} />
-                      <View
-                        style={[
-                          styles.selectedTrack,
-                          {
-                            left: selectedLeft,
-                            width: selectedWidth,
-                          },
-                        ]}
-                      />
-                      <View
-                        style={[styles.trimHandle, { left: selectedLeft - HANDLE_SIZE / 2 }]}
-                        {...leftHandlePanResponder.panHandlers}
-                      >
-                        <View style={styles.handleGrip} />
+                  <>
+                    <View style={styles.timelineRow}>
+                      <Text style={styles.timelineEdgeText}>{formatTime(trimRange.startMs)}</Text>
+                      <View style={styles.track} onLayout={handleTrackLayout}>
+                        <View style={styles.trackBase} />
+                        <View
+                          style={[
+                            styles.selectedTrack,
+                            {
+                              left: selectedLeft,
+                              width: selectedWidth,
+                            },
+                          ]}
+                        />
+                        <View
+                          style={[styles.trimHandle, { left: selectedLeft - HANDLE_SIZE / 2 }]}
+                          {...leftHandlePanResponder.panHandlers}
+                        >
+                          <View style={styles.handleGrip} />
+                        </View>
+                        <View
+                          style={[styles.trimHandle, { left: selectedLeft + selectedWidth - HANDLE_SIZE / 2 }]}
+                          {...rightHandlePanResponder.panHandlers}
+                        >
+                          <View style={styles.handleGrip} />
+                        </View>
                       </View>
-                      <View
-                        style={[styles.trimHandle, { left: selectedLeft + selectedWidth - HANDLE_SIZE / 2 }]}
-                        {...rightHandlePanResponder.panHandlers}
-                      >
-                        <View style={styles.handleGrip} />
-                      </View>
+                      <Text style={styles.timelineEdgeText}>{formatTime(trimRange.endMs)}</Text>
                     </View>
-                    <Text style={styles.timelineEdgeText}>{formatTime(durationMs ?? 0)}</Text>
-                  </View>
+                    <Text style={styles.selectedDurationText}>
+                      Selected: {formatTime(selectedDurationMs)}
+                    </Text>
+                  </>
                 ) : (
                   <View style={styles.timelineLoadingContainer}>
                     <ActivityIndicator size="small" color={Colors.white} />
@@ -729,13 +1035,24 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 8,
+  },
+  chatPlayerContainer: {
+    width: "100%",
+  },
+  galleryPlayerContainer: {
+    width: "100%",
   },
   playerSurface: {
     flex: 1,
-    width: "100%",
     position: "relative",
     overflow: "hidden",
+  },
+  chatPlayerSurface: {
+    width: "100%",
+  },
+  galleryPlayerSurface: {
+    alignSelf: "center",
+    maxWidth: "100%",
   },
   video: {
     width: "100%",
@@ -817,9 +1134,9 @@ const styles = StyleSheet.create({
   progressThumb: {
     position: "absolute",
     top: 9,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: PROGRESS_THUMB_SIZE,
+    height: PROGRESS_THUMB_SIZE,
+    borderRadius: PROGRESS_THUMB_SIZE / 2,
     backgroundColor: Colors.white,
   },
   playerLoadingOverlay: {
@@ -907,7 +1224,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  trimNoticeText: {
+  selectedDurationText: {
     color: "rgba(255,255,255,0.72)",
     fontSize: 12,
     textAlign: "center",

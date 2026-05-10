@@ -6,13 +6,15 @@ import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Colors } from "@/constants/theme";
+import { getCachedMediaUriAsync } from "@/utils/mediaCache";
 import { MediaHighlightFrame } from "./MediaHighlightFrame";
 
 const { width } = Dimensions.get("window");
 const VIDEO_MAX_WIDTH_RATIO = 0.58;
-const VIDEO_PREVIEW_ASPECT_RATIO = 0.76;
+const VIDEO_PREVIEW_ASPECT_RATIO = 0.72;
 const VIDEO_MAX_WIDTH = width * VIDEO_MAX_WIDTH_RATIO;
 const THUMBNAIL_TIME_MS = 1000;
+const DEFAULT_VIDEO_MIME_TYPE = "video/mp4";
 
 export type MessageLayout = {
   x: number;
@@ -24,6 +26,7 @@ export type MessageLayout = {
 export type VideoMessageProps = {
   uri: string;
   fileName: string;
+  mimeType?: string;
   isMe: boolean;
   timeStr: string;
   duration?: number;
@@ -49,6 +52,7 @@ const formatDuration = (durationMs: number | undefined): string => {
 export const VideoMessage = ({
   uri,
   fileName,
+  mimeType,
   isMe,
   timeStr,
   duration,
@@ -61,22 +65,38 @@ export const VideoMessage = ({
   const containerRef = useRef<View>(null);
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const [isThumbnailLoading, setIsThumbnailLoading] = useState(false);
+  const [isMediaResolving, setIsMediaResolving] = useState(false);
   const isSending = status === "sending";
-  const isCardLoading = isSending || isThumbnailLoading;
+  const isCardLoading = isSending || isThumbnailLoading || isMediaResolving;
 
   useEffect(() => {
     let isMounted = true;
+    setThumbnailUri(null);
 
     const loadThumbnail = async () => {
       if (!uri.trim()) {
         setThumbnailUri(null);
+        setIsMediaResolving(false);
+        setIsThumbnailLoading(false);
         return;
       }
 
       try {
+        setIsMediaResolving(true);
         setIsThumbnailLoading(true);
 
-        const result = await getThumbnailAsync(uri, { time: THUMBNAIL_TIME_MS });
+        const cachedVideoUri = await getCachedMediaUriAsync({
+          uri,
+          mediaType: "video",
+          mimeType: mimeType ?? DEFAULT_VIDEO_MIME_TYPE,
+          fileName,
+        });
+
+        if (isMounted) {
+          setIsMediaResolving(false);
+        }
+
+        const result = await getThumbnailAsync(cachedVideoUri, { time: THUMBNAIL_TIME_MS });
 
         if (isMounted) {
           setThumbnailUri(result.uri);
@@ -87,6 +107,7 @@ export const VideoMessage = ({
         }
       } finally {
         if (isMounted) {
+          setIsMediaResolving(false);
           setIsThumbnailLoading(false);
         }
       }
@@ -97,7 +118,7 @@ export const VideoMessage = ({
     return () => {
       isMounted = false;
     };
-  }, [uri]);
+  }, [fileName, mimeType, uri]);
 
   const handleLongPress = () => {
     containerRef.current?.measure((_x, _y, measuredWidth, measuredHeight, pageX, pageY) => {

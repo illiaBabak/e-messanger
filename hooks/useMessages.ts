@@ -22,6 +22,7 @@ import { uploadFileMessage, uploadImageMessage, uploadVideoMessage, uploadVoiceM
 
 const DEFAULT_VIDEO_FILE_NAME = "video.mp4";
 const DEFAULT_VIDEO_MIME_TYPE = "video/mp4";
+const REMOTE_MEDIA_URI_PATTERN = /^https?:\/\//i;
 
 export type ReplyToSnippet = {
   id: string;
@@ -83,6 +84,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function getOptionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isRemoteMediaUri(uri: string): boolean {
+  return REMOTE_MEDIA_URI_PATTERN.test(uri.trim());
 }
 
 function getChatVideoFromFirestore(value: unknown): ChatVideo | undefined {
@@ -333,7 +338,11 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
       let imageUrls: string[] = [];
       if (imagesUris && imagesUris.length > 0) {
         imageUrls = await Promise.all(
-          imagesUris.map((uri, index) => uploadImageMessage(uri, chatId, newMessageRef.id, index))
+          imagesUris.map((uri, index) => (
+            isRemoteMediaUri(uri)
+              ? uri
+              : uploadImageMessage(uri, chatId, newMessageRef.id, index)
+          ))
         );
       }
 
@@ -345,20 +354,24 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
       let videoUrl;
       let uploadVideoInfo = videoInfo;
       if (videoInfo) {
-        const compressionResult = await compressVideoForUploadAsync({
-          uri: videoInfo.uri,
-          fileName: videoInfo.fileName,
-          mimeType: videoInfo.mimeType,
-        });
+        if (isRemoteMediaUri(videoInfo.uri)) {
+          videoUrl = videoInfo.uri;
+        } else {
+          const compressionResult = await compressVideoForUploadAsync({
+            uri: videoInfo.uri,
+            fileName: videoInfo.fileName,
+            mimeType: videoInfo.mimeType,
+          });
 
-        uploadVideoInfo = buildCompressedVideoInfo(videoInfo, compressionResult);
-        videoUrl = await uploadVideoMessage(
-          uploadVideoInfo.uri,
-          chatId,
-          newMessageRef.id,
-          uploadVideoInfo.fileName,
-          uploadVideoInfo.mimeType ?? DEFAULT_VIDEO_MIME_TYPE,
-        );
+          uploadVideoInfo = buildCompressedVideoInfo(videoInfo, compressionResult);
+          videoUrl = await uploadVideoMessage(
+            uploadVideoInfo.uri,
+            chatId,
+            newMessageRef.id,
+            uploadVideoInfo.fileName,
+            uploadVideoInfo.mimeType ?? DEFAULT_VIDEO_MIME_TYPE,
+          );
+        }
       }
 
       const messageData = {

@@ -1,13 +1,23 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Dimensions, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Colors } from "@/constants/theme";
+import { getCachedMediaUriAsync } from "@/utils/mediaCache";
 import { PreviewActionsMenu } from "./PreviewActionsMenu";
 
 const { width, height } = Dimensions.get("window");
+const REMOTE_URI_PATTERN = /^https?:\/\//i;
+
+function getInitialDisplayImageUrl(uri: string | null): string | null {
+  if (!uri) {
+    return null;
+  }
+
+  return REMOTE_URI_PATTERN.test(uri.trim()) ? null : uri;
+}
 
 export type ImagePreviewModalProps = {
   visible: boolean;
@@ -38,6 +48,34 @@ export const ImagePreviewModal = ({
 }: ImagePreviewModalProps) => {
   const insets = useSafeAreaInsets();
   const [menuVisible, setMenuVisible] = useState(false);
+  const [displayImageUrl, setDisplayImageUrl] = useState<string | null>(() => getInitialDisplayImageUrl(imageUrl));
+
+  useEffect(() => {
+    let isMounted = true;
+
+    setDisplayImageUrl(getInitialDisplayImageUrl(imageUrl));
+
+    const resolveCachedImage = async () => {
+      if (!imageUrl) {
+        return;
+      }
+
+      const cachedUri = await getCachedMediaUriAsync({
+        uri: imageUrl,
+        mediaType: "image",
+      });
+
+      if (isMounted) {
+        setDisplayImageUrl(cachedUri);
+      }
+    };
+
+    resolveCachedImage();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [imageUrl]);
 
   if (!imageUrl) return null;
 
@@ -45,12 +83,18 @@ export const ImagePreviewModal = ({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.container}>
         {/* Full screen image */}
-        <Image
-          source={imageUrl}
-          style={styles.image}
-          contentFit="contain"
-          transition={200}
-        />
+        {displayImageUrl ? (
+          <Image
+            source={displayImageUrl}
+            style={styles.image}
+            contentFit="contain"
+            transition={200}
+          />
+        ) : (
+          <View style={styles.imageLoadingContainer}>
+            <ActivityIndicator size="large" color={Colors.white} />
+          </View>
+        )}
 
         {/* Top Header Overlay */}
         <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) }]}>
@@ -108,6 +152,11 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     width,
     height,
+  },
+  imageLoadingContainer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
   },
   header: {
     position: "absolute",

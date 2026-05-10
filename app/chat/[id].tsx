@@ -197,6 +197,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
           <VideoMessage
             uri={item.video.url}
             fileName={item.video.fileName}
+            mimeType={item.video.mimeType}
             duration={item.video.duration}
             isMe={isMe}
             timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -317,6 +318,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
             <VideoMessage
               uri={item.video.url}
               fileName={item.video.fileName}
+              mimeType={item.video.mimeType}
               duration={item.video.duration}
               isMe={isMe}
               timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -1096,6 +1098,7 @@ export default function ChatScreen() {
                   <VideoMessage
                     uri={selectedMessage.video.url}
                     fileName={selectedMessage.video.fileName}
+                    mimeType={selectedMessage.video.mimeType}
                     duration={selectedMessage.video.duration}
                     isMe={selectedMessage.senderId === user?.uid}
                     timeStr={formatTime(selectedMessage.createdAt)}
@@ -1159,6 +1162,7 @@ export default function ChatScreen() {
                     <VideoMessage
                       uri={selectedMessage.video.url}
                       fileName={selectedMessage.video.fileName}
+                      mimeType={selectedMessage.video.mimeType}
                       duration={selectedMessage.video.duration}
                       isMe={selectedMessage.senderId === user?.uid}
                       timeStr={formatTime(selectedMessage.createdAt)}

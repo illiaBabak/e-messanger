@@ -1,15 +1,21 @@
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import { Image } from "expo-image";
-import React, { useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Colors } from "@/constants/theme";
+import { getCachedMediaUriAsync } from "@/utils/mediaCache";
 import { MediaHighlightFrame } from "./MediaHighlightFrame";
 
 const { width } = Dimensions.get("window");
 const IMAGE_MAX_WIDTH = width * 0.55; // 55% of screen width
 const IMAGE_ASPECT_RATIO = 0.8;
+const REMOTE_URI_PATTERN = /^https?:\/\//i;
+
+function getInitialDisplayUri(uri: string): string | null {
+  return REMOTE_URI_PATTERN.test(uri.trim()) ? null : uri;
+}
 
 export type ImageMessageProps = {
   url: string;
@@ -33,6 +39,30 @@ export const ImageMessage = ({
   onLongPress,
 }: ImageMessageProps) => {
   const containerRef = useRef<View>(null);
+  const [displayUri, setDisplayUri] = useState<string | null>(() => getInitialDisplayUri(url));
+
+  useEffect(() => {
+    let isMounted = true;
+
+    setDisplayUri(getInitialDisplayUri(url));
+
+    const resolveCachedImage = async () => {
+      const cachedUri = await getCachedMediaUriAsync({
+        uri: url,
+        mediaType: "image",
+      });
+
+      if (isMounted) {
+        setDisplayUri(cachedUri);
+      }
+    };
+
+    resolveCachedImage();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [url]);
 
   const handleLongPress = () => {
     containerRef.current?.measure((_x, _y, measuredWidth, measuredHeight, pageX, pageY) => {
@@ -54,7 +84,13 @@ export const ImageMessage = ({
           style={styles.mediaHighlightOuter}
           clipStyle={styles.mediaClip}
         >
-          <Image source={url} style={styles.mediaImage} contentFit="cover" transition={200} />
+          {displayUri ? (
+            <Image source={displayUri} style={styles.mediaImage} contentFit="cover" transition={200} />
+          ) : (
+            <View style={styles.cacheLoadingOverlay}>
+              <ActivityIndicator size="small" color={Colors.white} />
+            </View>
+          )}
 
           {status === "sending" && (
             <View style={styles.sendingOverlay}>
@@ -100,6 +136,12 @@ const styles = StyleSheet.create({
   sendingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.3)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cacheLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.16)",
     justifyContent: "center",
     alignItems: "center",
   },
