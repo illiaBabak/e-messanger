@@ -7,6 +7,7 @@ import {
   updateDoc 
 } from '@react-native-firebase/firestore';
 import { firestore } from './firebase';
+import { normalizePhoneNumber } from '@/utils/phone';
 
 export class FirestoreError extends Error {
   code: string;
@@ -33,7 +34,8 @@ export async function saveUserProfileData(
   userId: string,
   login: string,
   name: string,
-  photoURL: string | null
+  photoURL: string | null,
+  phoneNumber: string | null = null,
 ): Promise<void> {
   const userRef = doc(firestore, 'users', userId);
   const usernameRef = doc(firestore, 'usernames', login);
@@ -48,13 +50,20 @@ export async function saveUserProfileData(
       
       transaction.set(usernameRef, { userId });
       
-      transaction.set(userRef, {
+      const userData: Record<string, string | null | ReturnType<typeof serverTimestamp>> = {
         userId,
         login,
         name,
         photoURL,
         createdAt: serverTimestamp(),
-      }, { merge: true });
+      };
+
+      if (phoneNumber) {
+        userData.phoneNumber = phoneNumber;
+        userData.phoneNumberNormalized = normalizePhoneNumber(phoneNumber);
+      }
+      
+      transaction.set(userRef, userData, { merge: true });
     });
   } catch (error) {
     console.error('[Firestore] saveUserProfileData error', error);

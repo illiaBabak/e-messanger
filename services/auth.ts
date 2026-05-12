@@ -96,7 +96,8 @@ export async function updateUserProfile(
 
     await updateProfile(user, { displayName: name, photoURL: defaultPhotoURL });
 
-    await saveUserProfileData(user.uid, login, name, photoURL);
+    const phoneNumber = user.phoneNumber || null;
+    await saveUserProfileData(user.uid, login, name, photoURL, phoneNumber);
   } catch (error) {
     if (error instanceof Error && error.name === "FirestoreError") {
       throw error

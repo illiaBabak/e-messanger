@@ -26,6 +26,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { ContactProfile, useContacts } from "@/hooks/useContacts";
 import { firestore } from "@/services/firebase";
 import { addContactToFirestore } from "@/services/firestore";
+import { getUserCountryCode, normalizePhoneNumber } from "@/utils/phone";
 
 type SortOption = "name" | "lastTimeOnline";
 type AddContactMethod = "phone" | "login";
@@ -124,10 +125,30 @@ export default function ContactsScreen() {
           foundUserId = usernameDoc.data()?.userId;
         }
       } else {
-        const cleanPhone = newContactPhone.trim();
+        const cleanPhoneRaw = newContactPhone.trim();
+        const defaultCountryCode = getUserCountryCode(user.phoneNumber);
+        const cleanPhoneNormalized = normalizePhoneNumber(cleanPhoneRaw, defaultCountryCode);
+        
         const usersRef = collection(firestore, "users");
-        const q = query(usersRef, where("phoneNumber", "==", cleanPhone));
-        const usersSnapshot = await getDocs(q);
+        
+        // Search by normalized phone
+        let usersSnapshot = await getDocs(
+          query(usersRef, where("phoneNumberNormalized", "==", cleanPhoneNormalized))
+        );
+
+        // Fallback: exact match of raw input
+        if (usersSnapshot.empty) {
+          usersSnapshot = await getDocs(
+            query(usersRef, where("phoneNumber", "==", cleanPhoneRaw))
+          );
+        }
+        
+        // Fallback: match normalized phone against the old un-normalized field
+        if (usersSnapshot.empty && cleanPhoneNormalized !== cleanPhoneRaw) {
+          usersSnapshot = await getDocs(
+            query(usersRef, where("phoneNumber", "==", cleanPhoneNormalized))
+          );
+        }
 
         if (!usersSnapshot.empty) {
           foundUserId = usersSnapshot.docs[0].id;
