@@ -1,6 +1,7 @@
-import { getDownloadURL, putFile, ref } from "@react-native-firebase/storage";
 import { ensureUploadableLocalFileAsync } from "@/utils/ensureUploadableLocalFile";
+import { getFileExtensionFromMetadata, normalizeMimeType } from "@/utils/fileKind";
 import { assertVideoUploadSize } from "@/utils/videoCompression";
+import { getDownloadURL, putFile, ref } from "@react-native-firebase/storage";
 import { storage } from "./firebase";
 
 const FILE_URI_PREFIX = "file://";
@@ -18,6 +19,12 @@ export class StorageError extends Error {
     this.name = 'StorageError';
   }
 }
+
+export type UploadFileMessageResult = {
+  url: string;
+  storagePath: string;
+  extension: string;
+};
 
 export async function uploadProfilePicture(
   uri: string,
@@ -127,19 +134,41 @@ export async function uploadFileMessage(
   uri: string,
   originalName: string,
   chatId: string,
-  messageId: string
-): Promise<string> {
+  messageId: string,
+  mimeType?: string,
+): Promise<UploadFileMessageResult> {
   try {
-    const cleanUri = uri.replace(FILE_URI_PREFIX, "");
-    const extension = originalName.split(".").pop() || DEFAULT_FILE_EXTENSION;
+    const uploadableFile = await ensureUploadableLocalFileAsync({
+      uri,
+      fileName: originalName,
+      mimeType: mimeType || "application/octet-stream",
+    });
+
+    const cleanUri = uploadableFile.uri.replace(FILE_URI_PREFIX, "");
+    const extension =
+      getFileExtensionFromMetadata({
+        fileName: originalName,
+        mimeType,
+        uri,
+      }) || DEFAULT_FILE_EXTENSION;
+    const contentType = normalizeMimeType(mimeType);
 
     const filename = `chats/${chatId}/files/${messageId}.${extension}`;
     const storageRef = ref(storage, filename);
 
-    await putFile(storageRef, cleanUri);
+    if (contentType) {
+      await putFile(storageRef, cleanUri, { contentType });
+    } else {
+      await putFile(storageRef, cleanUri);
+    }
+
     const downloadURL = await getDownloadURL(storageRef);
 
-    return downloadURL;
+    return {
+      url: downloadURL,
+      storagePath: filename,
+      extension,
+    };
   } catch (error) {
     console.error("[Storage] uploadFileMessage error", error);
     throw new StorageError("Failed to upload file message", "storage/upload-failed");

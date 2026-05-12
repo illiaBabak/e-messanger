@@ -15,7 +15,8 @@ import {
   writeBatch
 } from "@react-native-firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
-import type { ChatVideo, SelectedChatMedia } from "@/types/chatMedia";
+import type { ChatFile, ChatVideo, SelectedChatFile, SelectedChatMedia } from "@/types/chatMedia";
+import { getDisplayFileName, getFileExtensionFromMetadata } from "@/utils/fileKind";
 import { compressVideoForUploadAsync, type VideoCompressionResult } from "@/utils/videoCompression";
 import { firestore } from "../services/firebase";
 import { uploadFileMessage, uploadImageMessage, uploadVideoMessage, uploadVoiceMessage } from "../services/storage";
@@ -52,12 +53,7 @@ export type Message = {
     waveform: number[];
   };
   images?: string[];
-  file?: {
-    name: string;
-    url: string;
-    mimeType?: string;
-    size?: number;
-  };
+  file?: ChatFile;
   video?: ChatVideo;
   status?: "sending" | "sent" | "error";
 };
@@ -73,6 +69,24 @@ export function getMessagePreviewText(message: Message | PinnedMessage | ReplyTo
     return "🎤 Voice message";
   }
   if ('file' in message && message.file) {
+    const file = message.file;
+
+    if (isRecord(file)) {
+      const mimeType = getOptionalString(file.mimeType);
+      const fileName = getOptionalString(file.name) ?? getDisplayFileName({
+        mimeType,
+        uri: getOptionalString(file.url),
+      });
+      const extension = getFileExtensionFromMetadata({
+        fileName,
+        mimeType,
+        uri: getOptionalString(file.url),
+      }).toUpperCase();
+      const prefix = extension === "PDF" ? "📄" : "📎";
+
+      return `${prefix} ${fileName}`;
+    }
+
     return "📎 File";
   }
   return message.text || "";
@@ -84,6 +98,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function getOptionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function getOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function isRemoteMediaUri(uri: string): boolean {
@@ -115,6 +133,62 @@ function getChatVideoFromFirestore(value: unknown): ChatVideo | undefined {
     ...(originalSize !== undefined && { originalSize }),
     ...(compressedSize !== undefined && { compressedSize }),
     ...(compressionRatio !== undefined && { compressionRatio }),
+  };
+}
+
+function getChatFileFromFirestore(value: unknown): ChatFile | undefined {
+  if (!isRecord(value) || typeof value.url !== "string") {
+    return undefined;
+  }
+
+  const mimeType = getOptionalString(value.mimeType);
+  const name = getOptionalString(value.name) ?? getOptionalString(value.fileName) ?? getDisplayFileName({
+    mimeType,
+    uri: value.url,
+  });
+  const size = getOptionalNumber(value.size);
+  const storagePath = getOptionalString(value.storagePath);
+  const storedExtension = getOptionalString(value.extension)?.toLowerCase();
+  const extension =
+    storedExtension ??
+    getFileExtensionFromMetadata({
+      fileName: name,
+      mimeType,
+      uri: value.url,
+    });
+
+  return {
+    name,
+    url: value.url,
+    ...(mimeType !== undefined && { mimeType }),
+    ...(size !== undefined && { size }),
+    ...(storagePath !== undefined && { storagePath }),
+    ...(extension.length > 0 && { extension }),
+  };
+}
+
+function buildChatFilePayload(
+  fileInfo: SelectedChatFile,
+  url: string,
+  storagePath?: string,
+  uploadedExtension?: string,
+): ChatFile {
+  const extension =
+    fileInfo.extension ||
+    uploadedExtension ||
+    getFileExtensionFromMetadata({
+      fileName: fileInfo.name,
+      mimeType: fileInfo.mimeType,
+      uri: fileInfo.uri,
+    });
+
+  return {
+    name: fileInfo.name,
+    url,
+    ...(fileInfo.mimeType !== undefined && { mimeType: fileInfo.mimeType }),
+    ...(fileInfo.size !== undefined && { size: fileInfo.size }),
+    ...(storagePath !== undefined && { storagePath }),
+    ...(extension.length > 0 && { extension }),
   };
 }
 
@@ -208,7 +282,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
             isEdited: data.isEdited,
             audio: data.audio,
             images: data.images,
-            file: data.file,
+            file: getChatFileFromFirestore(data.file),
             video: getChatVideoFromFirestore(data.video),
           });
 
@@ -295,7 +369,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
     replyTo?: ReplyToSnippet,
     audioInfo?: { uri: string; duration: number; waveform: number[] },
     imagesUris?: string[],
-    fileInfo?: { name: string; uri: string; mimeType?: string; size?: number },
+    fileInfo?: SelectedChatFile,
     videoInfo?: SelectedChatMedia,
   ) => {
     if (!chatId || !currentUserId || !contactId) return;
@@ -314,7 +388,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         status: "sending",
         ...(replyTo && { replyTo }),
         ...(imagesUris && imagesUris.length > 0 && { images: imagesUris }),
-        ...(fileInfo && { file: { ...fileInfo, url: fileInfo.uri } }),
+        ...(fileInfo && { file: buildChatFilePayload(fileInfo, fileInfo.uri) }),
         ...(videoInfo && { video: buildChatVideoPayload(videoInfo, videoInfo.uri) }),
         ...(audioInfo && {
           audio: {
@@ -346,9 +420,21 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
         );
       }
 
-      let fileUrl;
+      let filePayload: ChatFile | undefined;
       if (fileInfo) {
-        fileUrl = await uploadFileMessage(fileInfo.uri, fileInfo.name, chatId, newMessageRef.id);
+        const uploadResult = await uploadFileMessage(
+          fileInfo.uri,
+          fileInfo.name,
+          chatId,
+          newMessageRef.id,
+          fileInfo.mimeType,
+        );
+        filePayload = buildChatFilePayload(
+          fileInfo,
+          uploadResult.url,
+          uploadResult.storagePath,
+          uploadResult.extension,
+        );
       }
 
       let videoUrl;
@@ -388,14 +474,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
           }
         }),
         ...(imageUrls.length > 0 && { images: imageUrls }),
-        ...(fileInfo && fileUrl && {
-          file: {
-            name: fileInfo.name,
-            url: fileUrl,
-            mimeType: fileInfo.mimeType,
-            size: fileInfo.size,
-          }
-        }),
+        ...(filePayload && { file: filePayload }),
         ...(uploadVideoInfo && videoUrl && {
           video: buildChatVideoPayload(uploadVideoInfo, videoUrl),
         }),
@@ -438,7 +517,7 @@ export function useMessages(currentUserId: string | undefined | null, contactId:
     replyTo?: ReplyToSnippet,
     audioInfo?: { uri: string; duration: number; waveform: number[] },
     imagesUris?: string[],
-    fileInfo?: { name: string; uri: string; mimeType?: string; size?: number },
+    fileInfo?: SelectedChatFile,
     videoInfo?: SelectedChatMedia,
   ) => {
     if (!chatId || !currentUserId || !contactId) return;

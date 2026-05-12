@@ -1,4 +1,12 @@
-import { formatFileSize, getFileIconByMimeType } from "@/utils/fileHelpers";
+import {
+  classifyFileKind,
+  formatFileSize,
+  getDisplayFileName,
+  getFileExtensionFromMetadata,
+  getFileIconByMimeType,
+  normalizeMimeType,
+  type FileKind,
+} from "@/utils/fileHelpers";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Skia } from "@shopify/react-native-skia";
@@ -28,13 +36,17 @@ import Reanimated, { useAnimatedStyle, withTiming } from "react-native-reanimate
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Colors } from "@/constants/theme";
-import type { SelectedChatMedia } from "@/types/chatMedia";
+import type { SelectedChatFile, SelectedChatMedia } from "@/types/chatMedia";
 import {
   getDownloadedMediaRecords,
   removeDownloadedMediaRecords,
   type DownloadedMediaRecord,
 } from "@/utils/downloadedMediaStorage";
-import { ensureUploadableLocalFileAsync, getUriWithoutHash } from "@/utils/ensureUploadableLocalFile";
+import {
+  ensureUploadableLocalFileAsync,
+  getUriWithoutHash,
+  type EnsureUploadableLocalFileResult,
+} from "@/utils/ensureUploadableLocalFile";
 import { VideoPreviewModal } from "./VideoPreviewModal";
 import {
   BRUSH_SIZES,
@@ -60,7 +72,9 @@ const EDIT_MODE_TRANSLATE_Y = -(SCREEN_HEIGHT * 0.11);
 const ANIMATION_DURATION = 250;
 const VIDEO_DURATION_MS_MULTIPLIER = 1000;
 const VIDEO_THUMBNAIL_TIME_MS = 1000;
+const DEFAULT_IMAGE_MIME_TYPE = "image/jpeg";
 const DEFAULT_VIDEO_MIME_TYPE = "video/mp4";
+const DEFAULT_FILE_MIME_TYPE = "application/octet-stream";
 
 const { width, height } = Dimensions.get("window");
 const COLUMN_COUNT = 3;
@@ -80,15 +94,18 @@ type AttachmentModalProps = {
   onSendVideo?: (video: SelectedChatMedia) => Promise<void> | void;
   contactName: string;
   galleryRefreshKey?: number;
-  onSendFile?: (fileInfo: { name: string; uri: string; mimeType?: string; size?: number }) => void;
+  onSendFile?: (fileInfo: SelectedChatFile) => void;
 };
 
-type RecentFile = {
+type PickedFileAsset = {
+  name?: string | null;
+  uri?: string | null;
+  mimeType?: string | null;
+  size?: number | null;
+};
+
+type RecentFile = SelectedChatFile & {
   id: string;
-  name: string;
-  uri: string;
-  mimeType?: string;
-  size?: number;
   sentAt: number;
 };
 
@@ -259,7 +276,7 @@ export const AttachmentModal = ({
     }
   }, [activeTab]);
 
-  const loadRecentFiles = async () => {
+  const loadRecentFiles = async (): Promise<void> => {
     try {
       const data = await AsyncStorage.getItem("recent_sent_files");
 
@@ -271,7 +288,7 @@ export const AttachmentModal = ({
     }
   };
 
-  const saveRecentFile = async (file: RecentFile) => {
+  const saveRecentFile = async (file: RecentFile): Promise<void> => {
     try {
       const updated = [file, ...recentFiles.filter(f => f.uri !== file.uri)].slice(0, 10);
       setRecentFiles(updated);
@@ -281,7 +298,106 @@ export const AttachmentModal = ({
     }
   };
 
-  const handlePickFile = async () => {
+  const buildSelectedFileInfo = (asset: PickedFileAsset): SelectedChatFile | null => {
+    const uri = asset.uri?.trim();
+
+    if (!uri) {
+      return null;
+    }
+
+    const mimeType = normalizeMimeType(asset.mimeType) || undefined;
+    const name = getDisplayFileName({
+      fileName: asset.name,
+      mimeType,
+      uri,
+    });
+    const extension = getFileExtensionFromMetadata({
+      fileName: name,
+      mimeType,
+      uri,
+    });
+    const size =
+      typeof asset.size === "number" && Number.isFinite(asset.size)
+        ? asset.size
+        : undefined;
+
+    return {
+      name,
+      uri,
+      ...(mimeType !== undefined && { mimeType }),
+      ...(size !== undefined && { size }),
+      ...(extension.length > 0 && { extension }),
+    };
+  };
+
+  const getUploadableMimeType = (kind: FileKind, mimeType: string | undefined): string => {
+    if (mimeType) {
+      return mimeType;
+    }
+
+    if (kind === "image") {
+      return DEFAULT_IMAGE_MIME_TYPE;
+    }
+
+    if (kind === "video") {
+      return DEFAULT_VIDEO_MIME_TYPE;
+    }
+
+    return DEFAULT_FILE_MIME_TYPE;
+  };
+
+  const preparePickedMediaFile = async (
+    fileInfo: SelectedChatFile,
+    kind: Extract<FileKind, "image" | "video">,
+  ): Promise<EnsureUploadableLocalFileResult> => {
+    return ensureUploadableLocalFileAsync({
+      uri: fileInfo.uri,
+      fileName: fileInfo.name,
+      mimeType: getUploadableMimeType(kind, fileInfo.mimeType),
+    });
+  };
+
+  const sendClassifiedFile = async (fileInfo: SelectedChatFile): Promise<void> => {
+    const kind = classifyFileKind({
+      fileName: fileInfo.name,
+      mimeType: fileInfo.mimeType,
+      uri: fileInfo.uri,
+    });
+
+    if (kind === "image") {
+      const uploadableImage = await preparePickedMediaFile(fileInfo, "image");
+      onSendMedia([uploadableImage.uri]);
+      onClose();
+      return;
+    }
+
+    if (kind === "video") {
+      if (!onSendVideo) {
+        Alert.alert("Video Error", "Video sending is not available right now.");
+        return;
+      }
+
+      const uploadableVideo = await preparePickedMediaFile(fileInfo, "video");
+      setPreviewVideo({
+        uri: uploadableVideo.uri,
+        type: "video",
+        fileName: uploadableVideo.fileName,
+        mimeType: uploadableVideo.mimeType,
+        fileSize: uploadableVideo.size ?? fileInfo.size,
+      });
+      return;
+    }
+
+    if (!onSendFile) {
+      Alert.alert("File Error", "File sending is not available right now.");
+      return;
+    }
+
+    onSendFile(fileInfo);
+    onClose();
+  };
+
+  const handlePickFile = async (): Promise<void> => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
@@ -290,33 +406,37 @@ export const AttachmentModal = ({
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
-        const fileInfo = {
+        const selectedFile = buildSelectedFileInfo(asset);
+
+        if (!selectedFile) {
+          Alert.alert("File Error", "The selected file is missing a readable URI.");
+          return;
+        }
+
+        const recentFile: RecentFile = {
+          ...selectedFile,
           id: Date.now().toString(),
-          name: asset.name,
-          uri: asset.uri,
-          mimeType: asset.mimeType,
-          size: asset.size,
           sentAt: Date.now(),
         };
 
-        saveRecentFile(fileInfo);
-
-        if (onSendFile) {
-          onSendFile(fileInfo);
-        }
-        onClose();
+        await saveRecentFile(recentFile);
+        await sendClassifiedFile(selectedFile);
       }
     } catch (e) {
       console.error("Error picking file", e);
+      Alert.alert("File Error", "Could not send the selected file.");
     }
   };
 
-  const handleSendRecentFile = (file: RecentFile) => {
-    saveRecentFile({ ...file, sentAt: Date.now() });
-    if (onSendFile) {
-      onSendFile(file);
+  const handleSendRecentFile = async (file: RecentFile): Promise<void> => {
+    try {
+      const updatedFile = { ...file, sentAt: Date.now() };
+      await saveRecentFile(updatedFile);
+      await sendClassifiedFile(updatedFile);
+    } catch (error) {
+      console.error("Error sending recent file", error);
+      Alert.alert("File Error", "Could not send this recent file.");
     }
-    onClose();
   };
 
   // ─── Editor State ─────────────────────────────────────────────────────────
@@ -1120,7 +1240,7 @@ export const AttachmentModal = ({
     return (
       <View style={styles.filesContainer}>
         <View style={styles.filesHeader}>
-          <Pressable style={styles.chooseFileButton} onPress={handlePickFile}>
+          <Pressable style={styles.chooseFileButton} onPress={() => { void handlePickFile(); }}>
             <Ionicons name="document-text" size={24} color={Colors.white} style={styles.chooseFileIcon} />
             <Text style={styles.chooseFileText}>Choose from Files</Text>
           </Pressable>
@@ -1138,7 +1258,7 @@ export const AttachmentModal = ({
             data={recentFiles}
             keyExtractor={item => item.id}
             renderItem={({ item }) => (
-              <Pressable style={styles.recentFileRow} onPress={() => handleSendRecentFile(item)}>
+              <Pressable style={styles.recentFileRow} onPress={() => { void handleSendRecentFile(item); }}>
                 <View style={styles.recentFileIconContainer}>
                   <Ionicons name={getFileIconByMimeType(item.mimeType, item.name)} size={24} color={Colors.white} />
                 </View>

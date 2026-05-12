@@ -32,3 +32,20 @@ export type ChatVideo = {
   compressedSize?: number;
   compressionRatio?: number;
 };
+
+export type SelectedChatFile = {
+  name: string;
+  uri: string;
+  mimeType?: string;
+  size?: number;
+  extension?: string;
+};
+
+export type ChatFile = {
+  name: string;
+  url: string;
+  mimeType?: string;
+  size?: number;
+  storagePath?: string;
+  extension?: string;
+};

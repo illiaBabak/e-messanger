@@ -37,15 +37,16 @@ import { useChatsList } from "@/hooks/useChatsList";
 import { useContacts } from "@/hooks/useContacts";
 import { getMessagePreviewText, Message, useMessages } from "@/hooks/useMessages";
 import { useAuth } from "@/providers/AuthProvider";
-import type { ChatVideo, SelectedChatMedia } from "@/types/chatMedia";
+import type { ChatFile, ChatVideo, SelectedChatMedia } from "@/types/chatMedia";
 import { saveDownloadedMediaRecord, type DownloadedMediaRecord } from "@/utils/downloadedMediaStorage";
 import { downloadVideoToLibraryAsync } from "@/utils/downloadVideoToLibrary";
+import { openPreparedChatFile, prepareChatFileForOpening } from "@/utils/openChatFile";
 
 const VIDEO_PREVIEW_URI_PATTERN = /^(https?:\/\/|file:\/\/)/i;
 const MESSAGE_HIGHLIGHT_DELAY_MS = 50;
 const VIDEO_SEND_FALLBACK_ERROR_MESSAGE = "Could not send video.";
 
-type DownloadingMediaType = "photo" | "video";
+type DownloadingMediaType = "photo" | "video" | "file";
 
 function isValidVideoPreviewUri(uri: string): boolean {
   return VIDEO_PREVIEW_URI_PATTERN.test(uri.trim());
@@ -67,8 +68,24 @@ function getVideoSendErrorMessage(error: unknown): string {
   return VIDEO_SEND_FALLBACK_ERROR_MESSAGE;
 }
 
+function getFileOpenErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  return "Could not open this file.";
+}
+
 function getDownloadStatusText(type: DownloadingMediaType): string {
-  return type === "photo" ? "Saving image..." : "Saving video...";
+  if (type === "photo") {
+    return "Saving image...";
+  }
+
+  if (type === "video") {
+    return "Saving video...";
+  }
+
+  return "Opening file...";
 }
 
 async function saveDownloadedMediaRecordSafely(
@@ -151,7 +168,7 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
   const hasImages = Array.isArray(item.images) && item.images.length > 0;
   const isOnlyImage = hasImages && !item.text && !item.audio && !item.replyTo && !item.isForwarded && !item.file && !item.video;
   const isOnlyVideo = item.video && !item.text && !item.audio && !hasImages && !item.replyTo && !item.isForwarded && !item.file;
-  const isOnlyFile = item.file && !item.text && !item.audio && !hasImages && !item.replyTo && !item.isForwarded && !item.video;
+  const isOnlyFile = item.file && !item.text && !item.audio && !hasImages && !item.replyTo && !item.video;
 
   if (isOnlyImage) {
     return (
@@ -234,7 +251,11 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
               timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               status={item.status}
               isRead={item.isRead}
-              onLongPress={handleLongPress}
+              isSelected={isSelected}
+              isForwarded={item.isForwarded}
+              highlightOpacity={highlightOpacity}
+              onPress={isSelectionMode ? handlePress : undefined}
+              onLongPress={(layout) => onLongPress(item, layout)}
            />
         </View>
       </View>
@@ -339,6 +360,10 @@ const MessageItem = memo(({ item, currentUserId, contactName, isSelectionMode, i
               timeStr={new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               status={item.status}
               isRead={item.isRead}
+              isSelected={isSelected}
+              isEmbedded
+              onPress={isSelectionMode ? handlePress : undefined}
+              onLongPress={(layout) => onLongPress(item, layout)}
             />
           ) : null}
           {item.audio ? (
@@ -550,6 +575,33 @@ export default function ChatScreen() {
     } catch (error) {
       console.error("Failed to download video", error);
       Alert.alert("Video Download Failed", getDownloadErrorMessage(error));
+    } finally {
+      downloadInProgressRef.current = false;
+      setDownloadingMediaType(null);
+    }
+  };
+
+  const handleDownloadFile = async (file: ChatFile) => {
+    closeMenu();
+
+    if (downloadInProgressRef.current) {
+      return;
+    }
+
+    downloadInProgressRef.current = true;
+    setDownloadingMediaType("file");
+
+    try {
+      const preparedFile = await prepareChatFileForOpening({
+        url: file.url,
+        name: file.name,
+        mimeType: file.mimeType,
+      });
+      await openPreparedChatFile(preparedFile);
+      showToast("File ready");
+    } catch (error) {
+      console.error("Failed to open file", error);
+      Alert.alert("File Error", getFileOpenErrorMessage(error));
     } finally {
       downloadInProgressRef.current = false;
       setDownloadingMediaType(null);
@@ -1108,7 +1160,7 @@ export default function ChatScreen() {
                     onLongPress={() => {}}
                   />
                 </View>
-              ) : selectedMessage.file && !selectedMessage.text && !selectedMessage.audio && !selectedMessage.images && !selectedMessage.replyTo && !selectedMessage.isForwarded && !selectedMessage.video ? (
+              ) : selectedMessage.file && !selectedMessage.text && !selectedMessage.audio && !selectedMessage.images && !selectedMessage.replyTo && !selectedMessage.video ? (
                 <View pointerEvents="none">
                   <FileMessage
                     name={selectedMessage.file.name}
@@ -1119,6 +1171,8 @@ export default function ChatScreen() {
                     timeStr={formatTime(selectedMessage.createdAt)}
                     status={selectedMessage.status}
                     isRead={selectedMessage.isRead}
+                    isForwarded={selectedMessage.isForwarded}
+                    isEmbedded
                     onLongPress={() => {}}
                   />
                 </View>
@@ -1181,6 +1235,7 @@ export default function ChatScreen() {
                       timeStr={formatTime(selectedMessage.createdAt)}
                       status={selectedMessage.status}
                       isRead={selectedMessage.isRead}
+                      isEmbedded
                     />
                   ) : (
                     <Text
@@ -1290,6 +1345,26 @@ export default function ChatScreen() {
                         )}
                         <Text style={styles.menuItemText}>
                           {isMediaDownloading ? downloadStatusText ?? "Saving..." : "Download"}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                    {selectedMessage.file ? (
+                      <Pressable
+                        style={[styles.menuItem, isMediaDownloading && styles.menuItemDisabled]}
+                        onPress={() => {
+                          if (selectedMessage.file) {
+                            void handleDownloadFile(selectedMessage.file);
+                          }
+                        }}
+                        disabled={isMediaDownloading}
+                      >
+                        {isMediaDownloading ? (
+                          <ActivityIndicator size="small" color={Colors.primary} />
+                        ) : (
+                          <Ionicons name="download-outline" size={20} color={Colors.textPrimary} />
+                        )}
+                        <Text style={styles.menuItemText}>
+                          {isMediaDownloading ? downloadStatusText ?? "Opening..." : "Download"}
                         </Text>
                       </Pressable>
                     ) : null}

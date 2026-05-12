@@ -1,6 +1,7 @@
 import { Colors } from "@/constants/theme";
 import { Message, getMessagePreviewText } from "@/hooks/useMessages";
-import type { SelectedChatMedia } from "@/types/chatMedia";
+import type { SelectedChatFile, SelectedChatMedia } from "@/types/chatMedia";
+import { getFileIconByMimeType } from "@/utils/fileHelpers";
 import { Ionicons } from "@expo/vector-icons";
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import React, { useEffect, useRef, useState } from "react";
@@ -9,6 +10,8 @@ import { AttachmentModal } from "./AttachmentModal";
 
 type AudioInfo = { uri: string; duration: number; waveform: number[] };
 
+const REPLY_FILE_ICON_SIZE = 14;
+
 type ChatInputProps = {
   messageText: string;
   setMessageText: (text: string) => void;
@@ -16,7 +19,7 @@ type ChatInputProps = {
   onSendAudio: (info: AudioInfo) => void;
   onSendMedia?: (uris: string[]) => void;
   onSendVideo?: (video: SelectedChatMedia) => Promise<void> | void;
-  onSendFile?: (fileInfo: { name: string; uri: string; mimeType?: string; size?: number }) => void;
+  onSendFile?: (fileInfo: SelectedChatFile) => void;
   galleryRefreshKey?: number;
   replyingToMessage: Message | null;
   editingMessage: Message | null;
@@ -163,6 +166,11 @@ export const ChatInput = ({
     return `${m}:${s < 10 ? "0" : ""}${s}`;
   };
 
+  const replyingFile = replyingToMessage?.file;
+  const replyPreviewText = editingMessage
+    ? editingMessage.text
+    : (replyingToMessage ? getMessagePreviewText(replyingToMessage) : "");
+
   return (
     <View style={styles.container}>
       {isRecording ? (
@@ -202,9 +210,18 @@ export const ChatInput = ({
                   <Text style={styles.replyPreviewName}>
                     {editingMessage ? "Edit Message" : (replyingToMessage?.senderId === currentUserId ? "You" : name)}
                   </Text>
-                  <Text style={styles.replyPreviewText} numberOfLines={1}>
-                    {editingMessage ? editingMessage.text : (replyingToMessage ? getMessagePreviewText(replyingToMessage) : "")}
-                  </Text>
+                  <View style={styles.replyPreviewTextRow}>
+                    {replyingFile ? (
+                      <Ionicons
+                        name={getFileIconByMimeType(replyingFile.mimeType, replyingFile.name)}
+                        size={REPLY_FILE_ICON_SIZE}
+                        color={Colors.textSecondary}
+                      />
+                    ) : null}
+                    <Text style={styles.replyPreviewText} numberOfLines={1}>
+                      {replyPreviewText}
+                    </Text>
+                  </View>
                 </View>
                 <Pressable onPress={onCancelReplyOrEdit} style={styles.replyPreviewClose}>
                   <Ionicons name="close-circle" size={20} color={Colors.textMuted} />
@@ -345,7 +362,13 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     marginBottom: 2,
   },
+  replyPreviewTextRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
   replyPreviewText: {
+    flex: 1,
     fontSize: 14,
     color: Colors.textSecondary,
   },
