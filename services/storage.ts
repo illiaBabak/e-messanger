@@ -26,6 +26,47 @@ export type UploadFileMessageResult = {
   extension: string;
 };
 
+export type ProfilePictureUploadInput = {
+  thumbnailUri: string;
+  largeUri: string;
+};
+
+export type UploadedProfilePictures = {
+  photoURL: string;
+  avatarUrl: string;
+  profilePhotoLargeUrl: string;
+};
+
+async function uploadProfileImageVariant(uri: string, storagePath: string): Promise<string> {
+  const cleanUri = uri.replace(FILE_URI_PREFIX, "");
+  const storageRef = ref(storage, storagePath);
+
+  await putFile(storageRef, cleanUri, { contentType: "image/jpeg" });
+
+  return getDownloadURL(storageRef);
+}
+
+export async function uploadProfilePictures(
+  images: ProfilePictureUploadInput,
+  userId: string,
+): Promise<UploadedProfilePictures> {
+  try {
+    const [avatarUrl, profilePhotoLargeUrl] = await Promise.all([
+      uploadProfileImageVariant(images.thumbnailUri, `avatars/${userId}/thumb.jpg`),
+      uploadProfileImageVariant(images.largeUri, `avatars/${userId}/large.jpg`),
+    ]);
+
+    return {
+      photoURL: avatarUrl,
+      avatarUrl,
+      profilePhotoLargeUrl,
+    };
+  } catch (error) {
+    console.error("[Storage] uploadProfilePictures error", error);
+    throw new StorageError("Failed to upload image", "storage/upload-failed");
+  }
+}
+
 export async function uploadProfilePicture(
   uri: string,
   userId: string

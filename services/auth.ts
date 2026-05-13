@@ -10,7 +10,7 @@ import {
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import Constants from "expo-constants";
 
-import { saveUserProfileData, updateUserPresence } from "./firestore";
+import { saveUserProfileData, updateUserPresence, type UserProfilePhotoData } from "./firestore";
 
 import { auth } from "./firebase";
 
@@ -85,19 +85,23 @@ export async function verifyOtp(otp: string): Promise<FirebaseAuthTypes.User> {
 export async function updateUserProfile(
   login: string,
   name: string,
-  photoURL: string | null 
+  photoData: UserProfilePhotoData | null,
 ): Promise<void> {
   const user = auth.currentUser;
 
   if (!user) throw new AuthError("No authenticated user", "unauthenticated");
 
   try {
-    const defaultPhotoURL = photoURL || undefined;
+    const defaultPhotoURL =
+      photoData?.avatarUrl ??
+      photoData?.photoURL ??
+      photoData?.profilePhotoLargeUrl ??
+      undefined;
 
     await updateProfile(user, { displayName: name, photoURL: defaultPhotoURL });
 
     const phoneNumber = user.phoneNumber || null;
-    await saveUserProfileData(user.uid, login, name, photoURL, phoneNumber);
+    await saveUserProfileData(user.uid, login, name, photoData, phoneNumber);
   } catch (error) {
     if (error instanceof Error && error.name === "FirestoreError") {
       throw error

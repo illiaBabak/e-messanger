@@ -47,6 +47,19 @@ const MESSAGE_HIGHLIGHT_DELAY_MS = 50;
 const VIDEO_SEND_FALLBACK_ERROR_MESSAGE = "Could not send video.";
 
 type DownloadingMediaType = "photo" | "video" | "file";
+type SearchParamValue = string | string[] | undefined;
+
+function getSearchParamValue(value: SearchParamValue): string | undefined {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.find((item) => item.trim().length > 0);
+  }
+
+  return undefined;
+}
 
 function isValidVideoPreviewUri(uri: string): boolean {
   return VIDEO_PREVIEW_URI_PATTERN.test(uri.trim());
@@ -409,11 +422,12 @@ export default function ChatScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id: routeId } = useLocalSearchParams();
+  const id = getSearchParamValue(routeId);
   const { user } = useAuth();
   const { contacts } = useContacts(user?.uid);
   const { chats } = useChatsList(user?.uid);
-  const { messages, pinnedMessages, isFriendTyping, sendMessage, deleteMessage, deleteMultipleMessages, togglePinMessage, forwardMessages, editMessage, setTyping } = useMessages(user?.uid, id as string);
+  const { messages, pinnedMessages, isFriendTyping, sendMessage, deleteMessage, deleteMultipleMessages, togglePinMessage, forwardMessages, editMessage, setTyping } = useMessages(user?.uid, id);
 
   const contactInfo = useMemo(() => contacts.find((c) => c.id === id), [contacts, id]);
   const chatInfo = useMemo(() => chats.find((c) => c.friendId === id), [chats, id]);
@@ -631,6 +645,23 @@ export default function ChatScreen() {
 
   const handleBack = () => {
     router.back();
+  };
+
+  const handleOpenProfile = () => {
+    if (!id) {
+      return;
+    }
+
+    router.push({
+      pathname: "/chat/[id]/profile",
+      params: {
+        id,
+        name,
+        status,
+        photoURL: decodedPhotoURL ?? "",
+        lastSeenMs: contactInfo?.lastSeenMs ? String(contactInfo.lastSeenMs) : "",
+      },
+    });
   };
 
   const handleSend = async () => {
@@ -1019,7 +1050,7 @@ export default function ChatScreen() {
               )}
             </View>
 
-            <Pressable style={styles.floatingAvatar}>
+            <Pressable style={styles.floatingAvatar} onPress={handleOpenProfile}>
               {decodedPhotoURL ? (
                 <Image
                   source={decodedPhotoURL}

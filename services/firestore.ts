@@ -30,11 +30,17 @@ export async function isLoginAvailable(login: string): Promise<boolean> {
   }
 }
 
+export type UserProfilePhotoData = {
+  photoURL: string | null;
+  avatarUrl?: string | null;
+  profilePhotoLargeUrl?: string | null;
+};
+
 export async function saveUserProfileData(
   userId: string,
   login: string,
   name: string,
-  photoURL: string | null,
+  photoData: UserProfilePhotoData | null,
   phoneNumber: string | null = null,
 ): Promise<void> {
   const userRef = doc(firestore, 'users', userId);
@@ -54,9 +60,17 @@ export async function saveUserProfileData(
         userId,
         login,
         name,
-        photoURL,
+        photoURL: photoData?.photoURL ?? null,
         createdAt: serverTimestamp(),
       };
+
+      if (photoData?.avatarUrl !== undefined) {
+        userData.avatarUrl = photoData.avatarUrl;
+      }
+
+      if (photoData?.profilePhotoLargeUrl !== undefined) {
+        userData.profilePhotoLargeUrl = photoData.profilePhotoLargeUrl;
+      }
 
       if (phoneNumber) {
         userData.phoneNumber = phoneNumber;
@@ -102,4 +116,3 @@ export async function addContactToFirestore(uid: string, contactId: string, alia
     throw new FirestoreError('Failed to add contact', 'firestore/write-failed');
   }
 }
-

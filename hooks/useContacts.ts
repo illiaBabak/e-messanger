@@ -63,7 +63,7 @@ export function useContacts(uid: string | undefined | null) {
                 name: alias || data.name || "Unknown",
                 status: data.status || "offline",
                 lastSeenMs: data.lastSeenMs?.toMillis() || Date.now(),
-                photoURL: data.photoURL,
+                photoURL: data.avatarUrl || data.photoURL,
                 addedAt,
               });
 

@@ -77,7 +77,7 @@ export function useChatsList(uid: string | undefined | null) {
                    ...chatMeta,
                    name: data.name || "Unknown",
                    status: data.status || "offline",
-                   photoURL: data.photoURL,
+                   photoURL: data.avatarUrl || data.photoURL,
                 });
                 
                 const newChats = Array.from(chatMap.values()).sort((a, b) => b.updatedAt - a.updatedAt);

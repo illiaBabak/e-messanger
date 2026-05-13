@@ -1,9 +1,11 @@
 import { useAuth } from "@/providers/AuthProvider";
 import { AuthError, getCurrentUser, updateUserProfile } from "@/services/auth";
 import { FirestoreError, isLoginAvailable } from "@/services/firestore";
-import { uploadProfilePicture } from "@/services/storage";
+import { uploadProfilePictures, type ProfilePictureUploadInput } from "@/services/storage";
 import { useRouter } from "expo-router";
 import { useState } from "react";
+
+export type SelectedProfilePhoto = ProfilePictureUploadInput;
 
 export function useCreateProfile() {
   const router = useRouter();
@@ -11,7 +13,7 @@ export function useCreateProfile() {
 
   const [name, setName] = useState("");
   const [login, setLogin] = useState("");
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [profilePhoto, setProfilePhoto] = useState<SelectedProfilePhoto | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -28,8 +30,8 @@ export function useCreateProfile() {
     if (error) setError("");
   };
 
-  const handlePhotoSelect = (uri: string) => {
-    setPhotoUri(uri);
+  const handlePhotoSelect = (photo: SelectedProfilePhoto) => {
+    setProfilePhoto(photo);
   };
 
   const handleContinue = async () => {
@@ -62,13 +64,11 @@ export function useCreateProfile() {
         return;
       }
 
-      let photoURL: string | null = null;
+      const uploadedPhotos = profilePhoto
+        ? await uploadProfilePictures(profilePhoto, user.uid)
+        : null;
 
-      if (photoUri) {
-        photoURL = await uploadProfilePicture(photoUri, user.uid);
-      }
-
-      await updateUserProfile(cleanLogin, trimmedName, photoURL);
+      await updateUserProfile(cleanLogin, trimmedName, uploadedPhotos);
 
       await refreshContext();
 
@@ -89,7 +89,7 @@ export function useCreateProfile() {
   return {
     name,
     login,
-    photoUri,
+    photoUri: profilePhoto?.largeUri ?? null,
     error,
     loading,
     handleNameChange,

@@ -29,6 +29,28 @@ import { useCreateProfile } from '@/hooks/useCreateProfile';
 import { SaveFormat } from 'expo-image-manipulator';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const PROFILE_IMAGE_LARGE_SIZE = 1200;
+const PROFILE_IMAGE_THUMBNAIL_SIZE = 300;
+const PROFILE_IMAGE_LARGE_COMPRESSION = 0.9;
+const PROFILE_IMAGE_THUMBNAIL_COMPRESSION = 0.75;
+
+async function resizeProfilePhotoAsync(
+  uri: string,
+  size: number,
+  compress: number,
+): Promise<string> {
+  const manipContext = ImageManipulator.ImageManipulator.manipulate(uri);
+
+  manipContext.resize({ width: size, height: size });
+
+  const imageRef = await manipContext.renderAsync();
+  const result = await imageRef.saveAsync({
+    compress,
+    format: SaveFormat.JPEG,
+  });
+
+  return result.uri;
+}
 
 export default function CreateProfileScreen() {
   const {
@@ -58,15 +80,21 @@ export default function CreateProfileScreen() {
       });
 
       if (!result.canceled && result.assets?.[0]?.uri) {
-        const manipContext = ImageManipulator.ImageManipulator.manipulate(result.assets[0].uri);
-
-        manipContext.resize({ width: 600, height: 600 });
-
-        const imageRef = await manipContext.renderAsync();
-
-        const manipResult = await imageRef.saveAsync({ compress: 0.7, format: SaveFormat.JPEG });
+        const sourceUri = result.assets[0].uri;
+        const [largeUri, thumbnailUri] = await Promise.all([
+          resizeProfilePhotoAsync(
+            sourceUri,
+            PROFILE_IMAGE_LARGE_SIZE,
+            PROFILE_IMAGE_LARGE_COMPRESSION,
+          ),
+          resizeProfilePhotoAsync(
+            sourceUri,
+            PROFILE_IMAGE_THUMBNAIL_SIZE,
+            PROFILE_IMAGE_THUMBNAIL_COMPRESSION,
+          ),
+        ]);
         
-        handlePhotoSelect(manipResult.uri);
+        handlePhotoSelect({ largeUri, thumbnailUri });
       }
     } catch (err) {
       console.error('Failed to pick image', err);
